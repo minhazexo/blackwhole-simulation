@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
-import { ChevronUp } from "lucide-react";
+import { ChevronUp, Compass } from "lucide-react";
 import { WebGLCanvas } from "@/components/canvas/WebGLCanvas";
 import { WebGPUCanvas } from "@/components/canvas/WebGPUCanvas";
 import ErrorBoundary from "@/components/debug/ErrorBoundary";
@@ -241,8 +241,8 @@ const App = () => {
     const { physicsBridge } = require("@/engine/physics-bridge");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     physicsBridge.ensureInitialized().catch((err: any) => {
-    // eslint-disable-next-line no-console
-    console.error("Critical Physics Initialization Failure:", err);
+      // eslint-disable-next-line no-console
+      console.error("Critical Physics Initialization Failure:", err);
       // Dismiss loading overlay on failure so the user sees the canvas
       // (which falls back to Schwarzschild approximations).
       setPhysicsReady(true);
@@ -928,6 +928,42 @@ BibTeX:
           isExpanded={isInfoExpanded}
           onToggleExpanded={setIsInfoExpanded}
         />
+
+        {physicsReady && showUI && !isCinematic && (
+          <motion.div
+            initial={{ opacity: 0, y: 24 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.8, delay: 1.5, ease: "easeOut" }}
+            className="fixed bottom-8 left-1/2 -translate-x-1/2 z-40"
+          >
+            <button
+              onClick={startAllViewpointsTour}
+              className="group relative px-8 py-4 rounded-full border border-white/20 bg-black/60 backdrop-blur-md hover:bg-white/10 hover:border-accent-cyan/40 transition-all active:scale-95 shadow-xl"
+            >
+              <div className="absolute inset-0 rounded-full bg-gradient-to-r from-accent-cyan/8 to-transparent opacity-0 group-hover:opacity-100 transition-opacity" />
+              <div className="relative flex items-center gap-4">
+                <Compass className="w-5 h-5 text-accent-cyan group-hover:text-accent-cyan transition-colors" />
+                <span className="text-[11px] font-black uppercase tracking-[0.2em] text-white/90 group-hover:text-white transition-colors">
+                  Take A Tour
+                </span>
+                <div className="flex gap-1">
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-accent-cyan/60 animate-pulse"
+                    style={{ animationDelay: "0s" }}
+                  />
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-accent-cyan/60 animate-pulse"
+                    style={{ animationDelay: "0.3s" }}
+                  />
+                  <span
+                    className="w-1.5 h-1.5 rounded-full bg-accent-cyan/60 animate-pulse"
+                    style={{ animationDelay: "0.6s" }}
+                  />
+                </div>
+              </div>
+            </button>
+          </motion.div>
+        )}
 
         {!showUI && (
           <div className="absolute bottom-8 right-8 z-30 animate-fade-in">

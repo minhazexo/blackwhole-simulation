@@ -2,14 +2,12 @@
 
 import { useState, useRef, useEffect, useCallback } from "react";
 
-const STORAGE_KEY_MUTED = "blackhole_audio_muted";
 const STORAGE_KEY_VOLUME = "blackhole_audio_volume";
 const AUDIO_SRC = "/videoplayback.mp3";
 
 export interface AudioState {
   isPlaying: boolean;
   volume: number;
-  hasInteracted: boolean;
 }
 
 export function useAudio() {
@@ -27,27 +25,21 @@ export function useAudio() {
     }
     return 0.5;
   });
-  const [hasInteracted, setHasInteracted] = useState(false);
 
-  // Track whether audio should be muted (persisted)
-  const [muted, setMuted] = useState(() => {
-    try {
-      const saved = localStorage.getItem(STORAGE_KEY_MUTED);
-      return saved === "true";
-    } catch {
-      return false;
-    }
-  });
-
-  // Create audio element once
+  // Create audio element once. Once playback starts, we NEVER call
+  // audio.pause() — we only toggle audio.muted to avoid the unreliable
+  // pause/resume cycle with preload="none".
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    // preload = "none" is intentional — the 2.1MB MP3 must not compete
+    // with WASM, JS bundles, or other critical startup resources for
+    // network bandwidth.
     const audio = new Audio(AUDIO_SRC);
     audio.loop = true;
-    audio.preload = "auto";
+    audio.preload = "none";
     audio.volume = volume;
-    audio.muted = true; // Start muted; unmute on first user interaction
+    audio.muted = true;
     audioRef.current = audio;
 
     return () => {
@@ -57,24 +49,13 @@ export function useAudio() {
     };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Sync volume to audio element
+  // Sync volume
   useEffect(() => {
     const audio = audioRef.current;
-    if (audio) {
-      audio.volume = volume;
-    }
+    if (audio) audio.volume = volume;
   }, [volume]);
 
-  // Persist muted state
-  useEffect(() => {
-    try {
-      localStorage.setItem(STORAGE_KEY_MUTED, String(muted));
-    } catch {
-      // ignore
-    }
-  }, [muted]);
-
-  // Persist volume state
+  // Persist volume
   useEffect(() => {
     try {
       localStorage.setItem(STORAGE_KEY_VOLUME, String(volume));
@@ -83,47 +64,40 @@ export function useAudio() {
     }
   }, [volume]);
 
-  // Watch for isPlaying state changes to control audio
+  // Sync isPlaying to audio muted state
   useEffect(() => {
     const audio = audioRef.current;
     if (!audio) return;
-
-    if (isPlaying && !muted) {
-      audio.muted = false;
-      audio.play().catch(() => {
-        // Browser blocked autoplay — will retry on first interaction
-      });
-    } else {
-      audio.pause();
-    }
-  }, [isPlaying, muted]);
+    audio.muted = !isPlaying;
+  }, [isPlaying]);
 
   /**
-   * Must be called on first user interaction (click/touch/keydown)
-   * to satisfy browser autoplay policies.
+   * Called on first user interaction to satisfy browser autoplay policies.
+   * After this, audio keeps playing internally forever; toggle() just
+   * flips the muted flag.
    */
   const handleInteraction = useCallback(() => {
-    if (!hasInteracted) {
-      setHasInteracted(true);
-      const audio = audioRef.current;
-      if (audio) {
-        // Browsers permit audio context resume + audio.play() inside a
-        // user gesture handler. Unmute and start playback.
-        audio.muted = false;
-        if (!muted) {
-          audio.play().catch(() => {
-            // Silent failure — user can still toggle manually
-          });
-        }
-        setIsPlaying(!muted);
-      }
-    }
-  }, [hasInteracted, muted]);
+    const audio = audioRef.current;
+    if (!audio || !audio.paused) return;
+    audio.muted = false;
+    audio.play().catch(() => {
+      // Browser blocked autoplay
+    });
+    setIsPlaying(true);
+  }, []);
 
   const toggle = useCallback(() => {
-    // Ensure interaction is flagged so further calls work.
-    setHasInteracted(true);
-    setMuted((prev) => !prev);
+    const audio = audioRef.current;
+    if (!audio) return;
+
+    if (audio.paused) {
+      // Audio was cleaned up (StrictMode remount / error recovery)
+      audio.muted = false;
+      audio.play().catch(() => {});
+      setIsPlaying(true);
+    } else {
+      setIsPlaying((prev) => !prev);
+    }
   }, []);
 
   const setVolume = useCallback((v: number) => {
@@ -132,12 +106,11 @@ export function useAudio() {
   }, []);
 
   return {
-    isPlaying: isPlaying && !muted,
+    isPlaying,
     volume,
     toggle,
     setVolume,
     handleInteraction,
-    hasInteracted,
   } satisfies AudioState & {
     toggle: () => void;
     setVolume: (v: number) => void;
