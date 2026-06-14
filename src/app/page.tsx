@@ -929,7 +929,7 @@ BibTeX:
           onToggleExpanded={setIsInfoExpanded}
         />
 
-        {physicsReady && showUI && !isCinematic && (
+        {physicsReady && showUI && !isCinematic && isCompact && (
           <motion.div
             initial={{ opacity: 0, y: 24 }}
             animate={{ opacity: 1, y: 0 }}
