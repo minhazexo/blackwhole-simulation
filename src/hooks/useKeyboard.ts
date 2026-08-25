@@ -26,6 +26,7 @@ interface UseKeyboardOptions {
   nudgeCamera?: (dTheta: number, dPhi: number) => void;
   toggleDebug?: () => void;
   onScreenshot?: () => void;
+  stopCinematic?: () => void;
 }
 
 export function useKeyboard({
@@ -35,6 +36,7 @@ export function useKeyboard({
   nudgeCamera,
   toggleDebug,
   onScreenshot,
+  stopCinematic,
 }: UseKeyboardOptions) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -45,7 +47,7 @@ export function useKeyboard({
       const ORBIT_STEP = 0.05; // Normalized mouse movement per keypress
       // Zoom step proportional to current distance: 10% of current zoom.
       // This keeps keyboard zoom feeling consistent across the 0.5–500 range.
-      const ZOOM_STEP_FACTOR = 0.10;
+      const ZOOM_STEP_FACTOR = 0.1;
 
       switch (e.key) {
         // Camera orbit (horizontal)
@@ -126,6 +128,12 @@ export function useKeyboard({
           toggleDebug?.();
           break;
 
+        // Exit cinematic / tour mode
+        case "Escape":
+          e.preventDefault();
+          stopCinematic?.();
+          break;
+
         // Screenshot capture
         case "p":
         case "P":
@@ -139,7 +147,15 @@ export function useKeyboard({
           break;
       }
     },
-    [setParams, applyPreset, setShowUI, nudgeCamera, toggleDebug, onScreenshot],
+    [
+      setParams,
+      applyPreset,
+      setShowUI,
+      nudgeCamera,
+      toggleDebug,
+      onScreenshot,
+      stopCinematic,
+    ],
   );
 
   useEffect(() => {
