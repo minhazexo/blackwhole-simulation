@@ -8,7 +8,7 @@ export const BACKGROUND_CHUNK = `
   //   - Domain-warped nebula with filamentary H-alpha/O-III structure
   //   - Weighted spectral distribution (more K/M dwarfs than O/B giants)
   //   - Galactic bulge concentration toward galactic center
-  //   - Subtle proper motion over time
+  //   - Deterministic star field (anchored to sky direction)
   //   - Anti-aliased star edges via fractional cell coordinates
   //   - Bright-star twinkle
   //   - Dark dust lanes with fractal extinction
@@ -116,15 +116,10 @@ export const BACKGROUND_CHUNK = `
     float clusterNoise = noise(clusterPos) * 0.15;
     float densityThreshold = clamp(baseThreshold - clusterNoise, 0.5, 0.999);
 
-    // Proper motion: subtle time-based offset to hash coordinates
-    // Stars appear to drift ~0.1 arcseconds per year; we exaggerate
-    // slightly for visual effect (1 arcsec/year = ~1e-5 rad/s)
-    // We use a very slow drift that's noticeable over 30+ seconds
-    vec3 pmOffset = vec3(
-      sin(u_time * 0.001 + seedOffset * 6.28),
-      cos(u_time * 0.0008 + seedOffset * 4.13),
-      sin(u_time * 0.0006 + seedOffset * 2.71)
-    ) * 0.001;
+    // No proper motion: stellar parallax is negligible at these scales, and
+    // a time term here made the entire sky slide during an otherwise static
+    // shot. Star cells are a pure function of view direction + layer seed,
+    // so an unchanged camera produces an unchanged star field.
 
     // Offset grid origin per layer to break up grid alignment patterns.
     // Without this, all layers share perfectly aligned cell boundaries,
@@ -134,7 +129,7 @@ export const BACKGROUND_CHUNK = `
       seedOffset * 0.089,
       seedOffset * 0.211
     );
-    vec3 gridPos = dir * gridScale + pmOffset + gridOffset;
+    vec3 gridPos = dir * gridScale + gridOffset;
     vec3 cell = floor(gridPos);
     vec3 fractPos = fract(gridPos) - 0.5;
 
@@ -188,16 +183,17 @@ export const BACKGROUND_CHUNK = `
   // creating realistic filamentary and wispy structures.
   vec3 renderNebula(vec3 dir) {
     // Warp the input coordinates using noise (domain warping)
-    // This creates the characteristic filamentary structure of real nebulae
+    // This creates the characteristic filamentary structure of real nebulae.
+    // Sampling is a pure function of direction: no u_time term. The previous
+    // slow drift crawled the gas across the frame and read as background
+    // motion; nebula structure and colors are otherwise unchanged.
     vec3 warp1 = vec3(
       fbm(dir * 1.2 + vec3(0.3, 0.7, 0.1)),
       fbm(dir * 1.2 + vec3(0.8, 0.2, 0.5)),
       fbm(dir * 1.2 + vec3(0.4, 0.6, 0.9))
     ) * 0.5;
 
-    // Drift rates kept slow (≤0.0015/s): the nebula crawling faster read
-    // as scene motion and added to dizziness. Structure itself unchanged.
-    vec3 warpedPos = dir * 1.8 + warp1 + u_time * 0.0015;
+    vec3 warpedPos = dir * 1.8 + warp1;
     float n1 = fbm(warpedPos);
 
     // Second warp for finer detail
@@ -207,11 +203,11 @@ export const BACKGROUND_CHUNK = `
       fbm(dir * 2.5 + vec3(0.2, 0.8, 0.5))
     ) * 0.3;
 
-    vec3 warpedPos2 = dir * 3.5 + warp2 - u_time * 0.0008;
+    vec3 warpedPos2 = dir * 3.5 + warp2;
     float n2 = fbm(warpedPos2);
 
     // Third sample for diffuse continuum
-    vec3 warpedPos3 = dir * 5.0 + vec3(0.5, 0.3, 0.7) + u_time * 0.0005;
+    vec3 warpedPos3 = dir * 5.0 + vec3(0.5, 0.3, 0.7);
     float n3 = fbm(warpedPos3);
 
     // H-alpha emission: bright red filaments

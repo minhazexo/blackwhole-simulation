@@ -127,7 +127,10 @@ export const SIMULATION_CONFIG = {
 
   // System Kinetics
   autoSpin: {
-    default: 0.001, // Slow meditative pan (~100s per full orbit at 60fps)
+    // Off by default: the camera must hold still on startup so the
+    // background starfield reads as a fixed sky. Users can opt in via the
+    // Cam Auto-Pan slider (and cinematic tours drive their own motion).
+    default: 0,
     min: -0.1,
     max: 0.1,
     step: 0.001,
