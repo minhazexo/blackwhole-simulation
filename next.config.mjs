@@ -4,6 +4,11 @@ const nextConfig = {
   compress: true,
   // Security: Hide Next.js header
   poweredByHeader: false,
+
+  // Next 16 blocks cross-origin dev resources (HMR websocket, dev assets)
+  // by default. The codebuff preview serves this dev server through its
+  // own hostname, so allow exactly that origin — nothing else.
+  allowedDevOrigins: ["pv-7744a3a2f71b-0b39de08-918d-4d59-93df-3f3e4586cf45.style.dev"],
   // Strict Mode for better development practices
   reactStrictMode: true,
 

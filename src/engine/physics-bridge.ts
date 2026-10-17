@@ -138,6 +138,9 @@ export class PhysicsBridge {
         await this.initializeWorker();
         return; // Success
       } catch (err) {
+        const failure = err instanceof Error ? err.message : String(err);
+        this.lastWorkerError = failure;
+
         // eslint-disable-next-line no-console
         console.warn(
           `PhysicsBridge: Worker init attempt ${attempt + 1}/${this.MAX_RETRIES + 1} failed`,
@@ -149,9 +152,13 @@ export class PhysicsBridge {
           const delay = Math.pow(2, attempt) * 1000;
           await new Promise((resolve) => setTimeout(resolve, delay));
         } else {
+          // Surface the real cause (chunk fetch rejected, script error, or
+          // init timeout) — without it this message is undiagnosable by
+          // reading a crash report alone.
           // eslint-disable-next-line no-console
           console.error(
             "PhysicsBridge: All worker retries exhausted, falling back to main thread...",
+            `Last error: ${failure}`,
           );
         }
       }
