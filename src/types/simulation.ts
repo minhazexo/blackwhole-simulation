@@ -40,6 +40,9 @@ export const DEFAULT_PARAMS: SimulationParams = {
   autoSpin: SIMULATION_CONFIG.autoSpin.default,
   diskSize: SIMULATION_CONFIG.diskSize.default,
   diskScaleHeight: SIMULATION_CONFIG.diskScaleHeight.default,
+  // Auto-Tune (adaptive resolution + quality governor) is opt-in: the site
+  // opens with the High Quality preset locked in at High ray tracing.
+  adaptiveResolution: false,
   renderScale: SIMULATION_CONFIG.renderScale.default,
   starDensity: SIMULATION_CONFIG.starDensity.default,
   features: SIMULATION_CONFIG.features.default,

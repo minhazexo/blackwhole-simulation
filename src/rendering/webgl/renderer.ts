@@ -413,6 +413,9 @@ export class WebGLRenderer {
       this.time += (cappedDelta / 1000) * SIMULATION_UNITS_PER_SECOND;
     }
 
+    // Auto-Tune off = fully locked: the monitor's own 3s calibration must
+    // not report a lower quality or nudge resolution behind the user's back.
+    this.performanceMonitor.setAutoTuneEnabled(!!params.adaptiveResolution);
     const metrics = this.performanceMonitor.updateMetrics(cappedDelta);
 
     // UNIFIED ADAPTIVE RESOLUTION (single owner).
@@ -425,10 +428,7 @@ export class WebGLRenderer {
     // adaptive resolution is off.
     const userCeiling = Math.min(
       PERFORMANCE_CONFIG.resolution.maxScale,
-      Math.max(
-        PERFORMANCE_CONFIG.resolution.minScale,
-        params.renderScale,
-      ),
+      Math.max(PERFORMANCE_CONFIG.resolution.minScale, params.renderScale),
     );
     let dynamicRenderScale = userCeiling;
     if (
@@ -470,10 +470,7 @@ export class WebGLRenderer {
     // satisfies FeatureToggles even when params.features is partial.
     let features = params.features || DEFAULT_FEATURES;
     if (this.isSoftwareWebGL) {
-      if (
-        params.features !== this.lastForcedInput ||
-        !this.forcedFeatures
-      ) {
+      if (params.features !== this.lastForcedInput || !this.forcedFeatures) {
         this.lastForcedInput = params.features ?? null;
         this.forcedFeatures = {
           ...DEFAULT_FEATURES,

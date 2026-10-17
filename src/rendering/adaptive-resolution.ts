@@ -12,7 +12,7 @@
  * 1. Use the `useAdaptiveResolution` hook in your component:
  * ```typescript
  * const { resolutionScale } = useAdaptiveResolution(metrics.fps, {
- *   enabled: params.adaptiveResolution ?? true,
+ *   enabled: params.adaptiveResolution ?? false,
  *   onResolutionChange: (scale) => {
  *     // Update canvas resolution
  *     if (canvasRef.current) {

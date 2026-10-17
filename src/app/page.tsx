@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronUp, Compass } from "lucide-react";
@@ -77,117 +77,34 @@ import { getPreset } from "@/config/feature-flags";
 import type { RayTracingQuality } from "@/types/features";
 import { settingsStorage } from "@/storage/settings";
 import { useWebGPUSupport } from "@/hooks/useWebGPUSupport";
-import { useSystemProfile } from "@/hooks/useSystemProfile";
 import { useAudio } from "@/hooks/useAudio";
 import { SOLAR_MASS } from "@/physics/constants";
 import { WasmLoadingOverlay } from "@/components/ui/WasmLoadingOverlay";
 import { PhysicsGuide } from "@/seo/PhysicsGuide";
 
-/**
- * Module-level once-guard for auto-calibration. The per-mount
- * profileAppliedRef is NOT enough: dev StrictMode unmounts/remounts the
- * whole tree (fresh refs), and each mount's probe can resolve with a
- * DIFFERENT preset (machine load varies during boot) — applying twice =
- * two recompiles + visible quality pops seconds apart. Module state
- * survives remounts (HMR/about:blank resets it, which is correct: a fresh
- * evaluation context deserves a fresh calibration).
- */
-let autoCalibrationApplied = false;
-
 const App = () => {
-  // ── System Profile (Root-level loading gate) ──
-  // Runs hardware detection, stress test, and preset recommendation
-  // before the main canvas mounts.
-  const { profile, isReady: profileReady } = useSystemProfile();
-
   const { isMobile } = useMobileOptimization();
   const { applyPreset } = usePresets();
   const { isSupported: isWebGPUSupported } = useWebGPUSupport();
   const hardwareSupport = useHardwareSupport();
 
-  // If WebGL is software-only, prefer WebGPU if available.
-  // Software WebGL (llvmpipe/SwiftShader) runs at ~10-15 FPS for ray marching.
-  const effectiveWebGPU = hardwareSupport.isSoftwareWebGL
-    ? (isWebGPUSupported ?? false)
-    : (isWebGPUSupported ?? false);
-
   const [params, setParams] = useState<SimulationParams>(() => {
-    // Start from the project default preset (high-quality / photo-1) so the
-    // first paint already shows the target fidelity instead of opening at
-    // medium and popping up/down seconds later when calibration lands.
+    // Deterministic opening state: High Quality preset (High ray tracing)
+    // and Auto-Tune off. Nothing recalibrates this after mount, so the first
+    // paint and the scene a minute later use the same quality rung.
     const defaultFeatures = getPreset(DEFAULT_PRESET_MODE);
     return {
       ...DEFAULT_PARAMS,
-      quality: defaultFeatures.rayTracingQuality,
       features: defaultFeatures,
       performancePreset: DEFAULT_PRESET_MODE,
-      adaptiveResolution: true,
+      // Auto-Tune starts OFF: the opening view keeps the High Quality preset
+      // and its High ray-tracing rung instead of being stepped down by the
+      // startup calibration/governor. Users can opt in from Performance.
     };
   });
 
-  // Pristine fingerprint: the exact defaults object identities from the
-  // initial state above. Calibration may only land on params that NOBODY
-  // moved: any quality-affecting change (hash preset, manual pick,
-  // governor rung) replaces the features object or preset label, which
-  // permanently disqualifies the auto-apply below. Zoom/slider tweaks
-  // spread {...prev} and preserve these references, so they don't block.
-  const pristineFeaturesRef = useRef(params.features);
-  const PRISTINE_PRESET = DEFAULT_PRESET_MODE;
-
-  // Explicit user intent wins over auto-calibration. Set by any manual
-  // ControlPanel change (sliders/presets/quality) and by a preset arriving
-  // via shared-link hash — in both cases the profile recommendation must
-  // NOT clobber the choice seconds later ("presets changing by themselves").
-  const userTouchedRef = useRef(false);
-  const profileAppliedRef = useRef(false);
-
-  // Phase 7: URL hash state. Called here (before the profile effect below)
-  // so hasPresetInHash is settled when calibration completes.
-  const { hasPresetInHash } = useUrlState(params, setParams);
-
-  // Manual-change marker: every ControlPanel write flows through this,
-  // distinguishing explicit user choice from system updates (governor,
-  // calibration, camera) for the guard above. Accepts values and updaters
-  // like the underlying setter (ControlPanel passes values).
-  const handleManualParamsChange = useCallback(
-    (
-      action:
-        | SimulationParams
-        | ((prev: SimulationParams) => SimulationParams),
-    ) => {
-      userTouchedRef.current = true;
-      setParams(action);
-    },
-    [],
-  );
-
-  // When the system profile completes, apply the recommended preset —
-  // globally ONCE (module guard survives StrictMode remounts), and only
-  // onto pristine defaults: an explicit hash preset, any manual touch, or
-  // any quality-affecting change (governor rung included) disqualifies.
-  useEffect(() => {
-    if (profileReady && !profileAppliedRef.current && profile.recommendedFeatures) {
-      profileAppliedRef.current = true;
-      if (autoCalibrationApplied) return;
-      autoCalibrationApplied = true;
-      const pristine =
-        !hasPresetInHash &&
-        !userTouchedRef.current &&
-        params.performancePreset === PRISTINE_PRESET &&
-        params.features === pristineFeaturesRef.current;
-      if (pristine) {
-        setParams((prev) => ({
-          ...prev,
-          quality: profile.recommendedFeatures.rayTracingQuality,
-          features: profile.recommendedFeatures,
-          performancePreset: profile.recommendedPreset,
-        }));
-      }
-    }
-    // Params read intentionally (fingerprint); re-running on every param
-    // change would defeat the once-guard. Guard flags make this safe.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [profileReady, profile.recommendedPreset, profile.recommendedFeatures, hasPresetInHash]);
+  // Phase 7: URL hash state.
+  useUrlState(params, setParams);
 
   const [showUI, setShowUI] = useState(true);
   const [metrics, setMetrics] = useState<PerformanceMetrics | undefined>(
@@ -355,7 +272,11 @@ const App = () => {
 
   // SELF-HEALING: If hardware IS supported, force-hide the HUD and clean URL
   useEffect(() => {
-    if (hardwareSupport.webgl && !hardwareSupport.isSoftwareWebGL && forceShowCompat) {
+    if (
+      hardwareSupport.webgl &&
+      !hardwareSupport.isSoftwareWebGL &&
+      forceShowCompat
+    ) {
       setForceShowCompat(false);
       const url = new URL(window.location.href);
       url.searchParams.delete("debug_hud");
@@ -594,7 +515,7 @@ const App = () => {
 
         <ControlPanel
           params={params}
-          onParamsChange={handleManualParamsChange}
+          onParamsChange={setParams}
           showUI={showUI && !isInfoExpanded}
           onToggleUI={setShowUI}
           isCompact={isCompact}

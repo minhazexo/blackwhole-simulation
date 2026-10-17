@@ -79,6 +79,10 @@ export class PerformanceMonitor {
 
   // Calibration State Machine (Phase 4)
   private isCalibrating: boolean = true;
+  // Auto-Tune gate: when off, the monitor must not lower its reported
+  // quality or touch render resolution on its own. The renderer drives this
+  // from params.adaptiveResolution every frame.
+  private autoTuneEnabled: boolean = true;
   private calibrationStartTime: number = performance.now();
   private maxAllowedQuality: RayTracingQuality = "ultra";
   private isMobile: boolean = false;
@@ -134,10 +138,24 @@ export class PerformanceMonitor {
     }
   }
 
+  /**
+   * Enable/disable all automatic tuning (calibration + PID resolution).
+   * Turning it off also cancels an in-flight calibration so it cannot lower
+   * the reported quality a few seconds after load.
+   */
+  public setAutoTuneEnabled(enabled: boolean): void {
+    this.autoTuneEnabled = enabled;
+    if (!enabled) this.isCalibrating = false;
+  }
+
   updateMetrics(deltaTime: number): PerformanceMetrics {
     const now = performance.now();
     this.frameTimes.push(deltaTime);
     this.invalidateCache();
+
+    if (!this.autoTuneEnabled) {
+      return this.getMetrics(deltaTime);
+    }
 
     // Calibration Phase logic
     if (this.isCalibrating) {

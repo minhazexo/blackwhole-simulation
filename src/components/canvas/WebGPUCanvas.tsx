@@ -189,7 +189,10 @@ export const WebGPUCanvas = ({
         const isCoarse =
           typeof window.matchMedia !== "undefined" &&
           window.matchMedia("(pointer: coarse)").matches;
-        const dpr = Math.min(window.devicePixelRatio || 1, isCoarse ? 1.0 : 1.5);
+        const dpr = Math.min(
+          window.devicePixelRatio || 1,
+          isCoarse ? 1.0 : 1.5,
+        );
         const width = entry.contentRect.width;
         const height = entry.contentRect.height;
 
@@ -234,7 +237,7 @@ export const WebGPUCanvas = ({
       // compute/history textures realloc at most on discrete 0.05 steps
       // with a 500ms cooldown — never every frame.
       // `adapt` is mount-stable state (see declaration above).
-      const enabled = liveParams.adaptiveResolution ?? true;
+      const enabled = liveParams.adaptiveResolution ?? false;
       if (enabled !== adapt.lastEnabled) {
         adapt.controller.setEnabled(enabled);
         adapt.lastEnabled = enabled;
@@ -287,7 +290,8 @@ export const WebGPUCanvas = ({
       // z = r cos(theta) cos(phi)
       // Note: Y-up world. Zero-alloc: reuse scratch instead of
       // vec3.fromValues()/mat4.create() per frame.
-      vec3.set(_eye,
+      vec3.set(
+        _eye,
         zoom * Math.sin(theta) * Math.cos(clampedPhi),
         zoom * Math.sin(clampedPhi),
         zoom * Math.cos(theta) * Math.cos(clampedPhi),
@@ -320,8 +324,14 @@ export const WebGPUCanvas = ({
       mat4.multiply(viewProj, proj, view);
 
       // Write into pre-allocated scratch arrays (avoids per-frame allocation)
-      _camPos[0] = eye[0]; _camPos[1] = eye[1]; _camPos[2] = eye[2]; _camPos[3] = 0;
-      _camDir[0] = dir[0]; _camDir[1] = dir[1]; _camDir[2] = dir[2]; _camDir[3] = 0;
+      _camPos[0] = eye[0];
+      _camPos[1] = eye[1];
+      _camPos[2] = eye[2];
+      _camPos[3] = 0;
+      _camDir[0] = dir[0];
+      _camDir[1] = dir[1];
+      _camDir[2] = dir[2];
+      _camDir[3] = 0;
 
       // History buffer: dedicated allocation, updated via copy so the
       // per-frame scratch (_viewProj) can be reused without cloning.
@@ -366,7 +376,9 @@ export const WebGPUCanvas = ({
       const acc = fpsAccum;
       acc.frames += 1;
       if (timestamp - acc.lastPush > 500) {
-        const fps = Math.round((acc.frames * 1000) / Math.max(1, timestamp - acc.lastPush));
+        const fps = Math.round(
+          (acc.frames * 1000) / Math.max(1, timestamp - acc.lastPush),
+        );
         acc.fps = fps;
         acc.frames = 0;
         acc.lastPush = timestamp;

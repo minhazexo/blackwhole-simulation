@@ -1,4 +1,4 @@
-import { describe, test, expect, beforeEach } from "vitest";
+import { describe, test, expect, beforeEach, vi } from "vitest";
 import * as fc from "fast-check";
 import { PerformanceMonitor } from "@/performance/monitor";
 import { PERFORMANCE_CONFIG } from "@/config/performance.config";
@@ -256,6 +256,22 @@ describe("PerformanceMonitor", () => {
     expect(metrics).toHaveProperty("rollingAverageFPS");
     expect(metrics).toHaveProperty("quality");
     expect(metrics).toHaveProperty("renderResolution");
+  });
+
+  test("Auto-Tune off never lowers reported quality during calibration", () => {
+    const m = new PerformanceMonitor();
+    m.setAutoTuneEnabled(false);
+    const now = performance.now();
+    const spy = vi.spyOn(performance, "now").mockReturnValue(now + 5000);
+    try {
+      // Well past the 3s calibration window at an FPS the old path would
+      // have demoted (20 FPS < minStableFPS 30).
+      for (let i = 0; i < 90; i++) m.updateMetrics(50);
+      expect(m.getMetrics().quality).toBe("high");
+      expect(m.getMetrics().renderResolution).toBe(1);
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   test("getWarnings returns critical warning for FPS < 30", () => {
