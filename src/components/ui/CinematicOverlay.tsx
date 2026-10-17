@@ -1,9 +1,9 @@
 "use client";
 
-import React, { useMemo, useRef, useEffect, useState } from "react";
+import React, { useMemo, useRef, useEffect, useState, memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { AlertTriangle, Radio, Camera, Film } from "lucide-react";
-import type { ViewpointDef } from "@/configs/viewpoints";
+import type { ViewpointDef } from "@/config/viewpoints.config";
 
 interface CinematicOverlayProps {
   isCinematic: boolean;
@@ -31,14 +31,16 @@ const LETTERBOX_HEIGHT = "6vh";
  * - ESC/click-to-exit hint
  * - Proximity telemetry near the horizon
  */
-export const CinematicOverlay = ({
+// Memoized: re-renders only when cinematic state/zoom actually change,
+// not on every idle camera sync (zoom prop is stable at idle).
+export const CinematicOverlay = memo(function CinematicOverlay({
   isCinematic,
   zoom,
   cinematicMode,
   currentViewpointDef,
   tourIndex,
   tourTotal,
-}: CinematicOverlayProps) => {
+}: CinematicOverlayProps) {
   // ── Proximity calculation ──
   const proximity = useMemo(() => {
     if (zoom > WARNING_LIMIT) return 0;
@@ -379,4 +381,4 @@ export const CinematicOverlay = ({
       )}
     </AnimatePresence>
   );
-};
+});

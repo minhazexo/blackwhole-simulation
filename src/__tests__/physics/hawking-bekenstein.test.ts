@@ -4,7 +4,7 @@ import {
   wienPeakFrequency,
   hawkingSpectrumPlanck,
   sampleHawkingSpectrum,
-} from "@/lib/physics/hawking";
+} from "@/physics/hawking";
 import {
   horizonAreaGeometric,
   horizonAreaSi,
@@ -12,7 +12,7 @@ import {
   schwarzschildMassLossRate,
   schwarzschildEvaporationTimeSeconds,
   formatScientific,
-} from "@/lib/physics/bekenstein";
+} from "@/physics/bekenstein";
 
 const SI_SOLAR_MASS = 1.98847e30;
 

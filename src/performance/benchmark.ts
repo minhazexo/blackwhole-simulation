@@ -7,6 +7,7 @@
  */
 
 import type { PresetName, FeatureToggles } from "@/types/features";
+import { isMobileDevice } from "@/utils/device-detection";
 
 /**
  * Results from testing a single preset
@@ -341,11 +342,7 @@ export class BenchmarkController {
    * Detect if running on mobile device
    */
   private detectMobile(): boolean {
-    return (
-      /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(
-        navigator.userAgent,
-      ) || window.innerWidth < 768
-    );
+    return isMobileDevice();
   }
 
   /**

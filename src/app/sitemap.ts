@@ -1,6 +1,8 @@
 import type { MetadataRoute } from "next";
 
-const BASE_URL = "https://blackhole-simulation.vercel.app";
+import { SITE_URL } from "@/seo/site";
+
+const BASE_URL = SITE_URL;
 
 export default function sitemap(): MetadataRoute.Sitemap {
   // SOURCE: Vercel deploy timestamp; future enhancement reads git commit date for per-anchor accuracy.

@@ -1,4 +1,5 @@
-import { PERFORMANCE_CONFIG } from "@/configs/performance.config";
+import { PERFORMANCE_CONFIG } from "@/config/performance.config";
+import { isMobileDevice } from "@/utils/device-detection";
 import type { RayTracingQuality } from "@/types/features";
 
 export interface PerformanceMetrics {
@@ -122,11 +123,7 @@ export class PerformanceMonitor {
 
     // Initial hardware awareness
     if (typeof window !== "undefined" && window.navigator) {
-      const ua = navigator.userAgent.toLowerCase();
-      this.isMobile =
-        /android|webos|iphone|ipad|ipod|blackberry|iemobile|opera mini/i.test(
-          ua,
-        );
+      this.isMobile = isMobileDevice();
 
       if (this.isMobile) {
         this.maxAllowedQuality = PERFORMANCE_CONFIG.calibration.mobileHardCap;
@@ -378,4 +375,63 @@ export class PerformanceMonitor {
     this.idleTimes.clear();
     this.invalidateCache();
   }
+}
+
+/**
+ * Runtime quality-governor policy (pure, unit-testable).
+ *
+ * The resolution PID can only cut pixels ~2x, which cannot rescue a GPU
+ * whose ray-step budget is 4x over its head. This ladder steps the actual
+ * ray-tracing quality. "off" is manual-only (slideshow/static mode) and
+ * never auto-selected.
+ */
+export const QUALITY_LADDER = ["low", "medium", "high", "ultra"] as const;
+export type GovernorQuality = (typeof QUALITY_LADDER)[number];
+
+/** FPS below which one rung is dropped (matches startup balanced floor). */
+export const GOVERNOR_STEP_DOWN_FPS = 25;
+/**
+ * Sustained FPS above which one rung is restored (4 consecutive evals).
+ * Deliberately far above the step-down floor: adjacent rungs differ ~2x in
+ * cost, so a narrow band would limit-cycle (step up → slow → step down →
+ * fast …), visible as quality "dancing". The 25/75 band exceeds any single
+ * rung's cost ratio with margin for resolution-PID movement.
+ */
+export const GOVERNOR_STEP_UP_FPS = 75;
+
+export type GovernorAction = "down" | "up" | "hold";
+
+/**
+ * Decide the governor direction for this evaluation tick.
+ *
+ * @param current - Active ray-tracing quality ("off" always holds).
+ * @param ceiling - Highest quality the governor may restore to.
+ * @param rollingFPS - Smoothed FPS (0/negative = unknown → hold).
+ */
+export function governorAction(
+  current: RayTracingQuality | string,
+  ceiling: RayTracingQuality | string,
+  rollingFPS: number,
+): GovernorAction {
+  const ci = (QUALITY_LADDER as readonly string[]).indexOf(current);
+  const hi = (QUALITY_LADDER as readonly string[]).indexOf(ceiling);
+  if (ci < 0 || hi < 0) return "hold"; // "off" or unknown → manual only
+  if (!(rollingFPS > 0)) return "hold";
+  if (rollingFPS < GOVERNOR_STEP_DOWN_FPS && ci > 0) return "down";
+  if (rollingFPS > GOVERNOR_STEP_UP_FPS && ci < hi) return "up";
+  return "hold";
+}
+
+/** Apply one rung step in the given direction (clamped to the ladder). */
+export function governorStep(
+  current: GovernorQuality,
+  action: GovernorAction,
+): GovernorQuality {
+  const ci = QUALITY_LADDER.indexOf(current);
+  if (action === "down") return QUALITY_LADDER[Math.max(0, ci - 1)] ?? current;
+  if (action === "up")
+    return (
+      QUALITY_LADDER[Math.min(QUALITY_LADDER.length - 1, ci + 1)] ?? current
+    );
+  return current;
 }

@@ -3,15 +3,17 @@
  *
  * Manages mobile-specific performance optimizations including:
  * - Automatic balanced preset application
- * - Ray step capping at 100
+ * - Ray step capping at 80 (canonical PERFORMANCE_CONFIG.compute.maxStepsMobile)
  * - Bloom disabled by default
  *
  * Requirements: 16.1, 16.3, 16.4
  */
 
 import { useMemo } from "react";
-import { isMobileDevice, getMobileRayStepCap } from "@/utils/device-detection";
-import { type FeatureToggles, DEFAULT_FEATURES } from "@/types/features";
+import { isMobileDevice } from "@/utils/device-detection";
+import { DEFAULT_FEATURES, getMobilePreset } from "@/config/feature-flags";
+import { PERFORMANCE_CONFIG } from "@/config/performance.config";
+import type { FeatureToggles } from "@/types/features";
 
 interface MobileOptimizationConfig {
   isMobile: boolean;
@@ -35,39 +37,29 @@ export const useMobileOptimization = (): MobileOptimizationConfig => {
    * - 16.1: Apply "Balanced" preset on mobile
    * - 16.4: Disable bloom by default on mobile
    *
+   * Delegates to the canonical getMobilePreset (single source of truth).
+   *
    * @returns Feature toggles optimized for mobile
    */
   const getMobileFeatures = (): FeatureToggles => {
-    // Use the global default configuration as the source of truth
-    const baseFeatures = { ...DEFAULT_FEATURES };
-
     if (!isMobile) {
-      return baseFeatures;
+      return { ...DEFAULT_FEATURES };
     }
-
-    // Apply mobile-specific overrides on top of the default config
-    // Requirements: 16.3 (Ray step cap handled elsewhere), 16.4 (No Bloom)
-    return {
-      ...baseFeatures,
-      bloom: false,
-      // Downgrade ray tracing quality if it's set to 'ultra' which is too heavy for mobile
-      rayTracingQuality:
-        baseFeatures.rayTracingQuality === "ultra"
-          ? "high"
-          : baseFeatures.rayTracingQuality,
-    };
+    return getMobilePreset();
   };
 
   /**
    * Apply mobile ray step cap
    *
-   * Requirements: 16.3 - Cap at 100 steps on mobile
+   * Requirements: 16.3 - Cap at 80 steps on mobile (canonical maxStepsMobile)
    *
    * @param requestedSteps - The requested number of ray steps
    * @returns Capped ray steps for mobile devices
    */
   const applyMobileRayStepCap = (requestedSteps: number): number => {
-    return getMobileRayStepCap(requestedSteps, isMobile);
+    return isMobile
+      ? Math.min(requestedSteps, PERFORMANCE_CONFIG.compute.maxStepsMobile)
+      : requestedSteps;
   };
 
   // Log mobile detection on mount (for debugging)

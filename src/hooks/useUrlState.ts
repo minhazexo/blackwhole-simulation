@@ -1,6 +1,8 @@
-import { useEffect, useCallback } from "react";
+import { useEffect, useCallback, useMemo } from "react";
 import type { SimulationParams } from "@/types/simulation";
 import { DEFAULT_PARAMS } from "@/types/simulation";
+import { getPreset } from "@/config/feature-flags";
+import type { PresetName } from "@/types/features";
 
 /**
  * URL hash-based state persistence for shareable simulation configurations.
@@ -56,7 +58,18 @@ function parseHash(): Partial<SimulationParams> {
     }
 
     if (key === "preset") {
-      parsed.performancePreset = value as SimulationParams["performancePreset"];
+      const presetNames: PresetName[] = [
+        "maximum-performance",
+        "balanced",
+        "high-quality",
+        "ultra-quality",
+      ];
+      if (presetNames.includes(value as PresetName)) {
+        const preset = value as PresetName;
+        const features = getPreset(preset);
+        parsed.performancePreset = preset;
+        parsed.features = features;
+      }
     }
   }
 
@@ -92,10 +105,16 @@ export function useUrlState(
   params: SimulationParams,
   setParams: React.Dispatch<React.SetStateAction<SimulationParams>>,
 ) {
+  // Parsed once (SSR-safe: parseHash returns {} without window). Records
+  // whether the shared link explicitly chose a preset, so auto-calibration
+  // doesn't clobber it seconds later ("presets changing by themselves").
+  const initialHash = useMemo(() => parseHash(), []);
+  const hasPresetInHash = initialHash.performancePreset !== undefined;
+
   // On mount: read hash and apply to params
   useEffect(() => {
-    const hashParams = parseHash();
-    if (Object.keys(hashParams).length > 0) {
+    if (Object.keys(initialHash).length > 0) {
+      const hashParams = initialHash;
       setParams((prev) => ({ ...prev, ...hashParams }));
     }
     // Only run once on mount
@@ -127,5 +146,5 @@ export function useUrlState(
     return `${window.location.origin}${window.location.pathname}${hash}`;
   }, [params]);
 
-  return { getShareableUrl };
+  return { getShareableUrl, hasPresetInHash };
 }

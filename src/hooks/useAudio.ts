@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 
 const STORAGE_KEY_VOLUME = "blackhole_audio_volume";
-const AUDIO_SRC = "/videoplayback.mp3";
+const AUDIO_SRC = "/audio/background-music.mp3";
 
 export interface AudioState {
   isPlaying: boolean;

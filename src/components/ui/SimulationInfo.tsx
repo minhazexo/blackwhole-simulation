@@ -1,4 +1,4 @@
-import React from "react";
+import React, { memo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 
 interface SimulationInfoProps {
@@ -7,11 +7,12 @@ interface SimulationInfoProps {
   onToggleExpanded: (expanded: boolean) => void;
 }
 
-export const SimulationInfo = ({
+// Memoized: all props are stable primitives/callbacks; skips idle renders.
+export const SimulationInfo = memo(function SimulationInfo({
   isVisible,
   isExpanded,
   onToggleExpanded,
-}: SimulationInfoProps) => {
+}: SimulationInfoProps) {
   return (
     <AnimatePresence>
       {isVisible && (
@@ -388,4 +389,4 @@ export const SimulationInfo = ({
       )}
     </AnimatePresence>
   );
-};
+});

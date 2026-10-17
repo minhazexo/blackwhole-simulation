@@ -7,6 +7,7 @@
  */
 
 import { X } from "lucide-react";
+import { memo } from "react";
 
 /**
  * Detailed performance metrics for debugging
@@ -61,12 +62,14 @@ interface DebugOverlayProps {
  * - Uniform update counts and buffer swap times (Requirement 20.4)
  * - Toggle to enable/disable debug overlay (Requirement 20.5)
  */
-export const DebugOverlay = ({
+// Memoized with a stable metrics object from the parent (see page): avoids
+// re-rendering on unrelated App renders. Early-returns null when disabled.
+export const DebugOverlay = memo(function DebugOverlay({
   enabled,
   onToggle,
   metrics,
   backend,
-}: DebugOverlayProps) => {
+}: DebugOverlayProps) {
   if (!enabled) {
     return null;
   }
@@ -325,4 +328,4 @@ export const DebugOverlay = ({
       </div>
     </div>
   );
-};
+});

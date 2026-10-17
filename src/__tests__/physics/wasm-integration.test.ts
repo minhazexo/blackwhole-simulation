@@ -148,12 +148,15 @@ describe("WASM PhysicsEngine — Photon Sphere", () => {
 });
 
 describe("WASM PhysicsEngine — Time Dilation", () => {
-  it("dilation near horizon is small", async ({ skip }) => {
+  it("dilation near horizon is large (dt_coord/dt_proper convention)", async ({ skip }) => {
     const engine = makeEngine(1.0, 0.0);
     if (!engine) return skip();
+    // Engine returns dt_coord/dt_proper = 1/sqrt(-g_tt) >= 1 outside the
+    // horizon (see gravitas-wasm lib.rs compute_dilation), NOT the sqrt
+    // convention. Just above the horizon this is large (~10 at 1.01*rh).
     const g = engine.compute_dilation(engine.compute_horizon() * 1.01);
-    expect(g).toBeGreaterThan(0);
-    expect(g).toBeLessThan(0.15);
+    expect(g).toBeGreaterThan(1);
+    expect(g).toBeLessThan(100);
   });
 
   it("dilation at infinity approaches 1", async ({ skip }) => {
@@ -162,13 +165,13 @@ describe("WASM PhysicsEngine — Time Dilation", () => {
     expect(engine.compute_dilation(1e6)).toBeCloseTo(1.0, 3);
   });
 
-  it("dilation increases monotonically with radius", async ({ skip }) => {
+  it("dilation decreases monotonically with radius (→ 1 at infinity)", async ({ skip }) => {
     const engine = makeEngine(1.0, 0.5);
     if (!engine) return skip();
     const radii = [2.5, 3.0, 4.0, 6.0, 10.0, 50.0, 100.0];
     const values = radii.map((r) => engine.compute_dilation(r));
     for (let i = 1; i < values.length; i++) {
-      expect(values[i]!).toBeGreaterThan(values[i - 1]!);
+      expect(values[i]!).toBeLessThan(values[i - 1]!);
     }
   });
 });
@@ -225,7 +228,9 @@ describe("WASM PhysicsEngine — Shadow Curve", () => {
     const engine = makeEngine(1.0, 0.9);
     if (!engine) return skip();
     const curve = engine.compute_shadow_curve(Math.PI / 4, 64);
-    expect(curve.length).toBe(128); // 64 * 2
+    // 64 points x 2 branches (-beta, +beta closed curve) x 2 coords.
+    // See gravitas-core shadow.rs bardeen_shadow.
+    expect(curve.length).toBe(256);
     for (let i = 0; i < curve.length; i++) {
       expect(isFinite(curve[i]!)).toBe(true);
     }

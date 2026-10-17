@@ -5,7 +5,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import * as fc from "fast-check";
-import { getMaxRaySteps, type RayTracingQuality } from "@/types/features";
+import type { RayTracingQuality } from "@/types/features";
+import { getMaxRaySteps } from "@/config/feature-flags";
 
 /**
  * Mock WebGL context for testing uniform updates

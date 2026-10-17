@@ -4,12 +4,12 @@
  */
 
 import { describe, it, expect } from "vitest";
+import type { PresetName } from "@/types/features";
 import {
   getPreset,
   matchesPreset,
   PERFORMANCE_PRESETS,
-  type PresetName,
-} from "@/types/features";
+} from "@/config/feature-flags";
 import type { SimulationParams } from "@/types/simulation";
 
 // Test the underlying functions directly since the hook is just a wrapper

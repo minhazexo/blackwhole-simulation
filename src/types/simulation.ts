@@ -6,7 +6,7 @@ import type { FeatureToggles, RayTracingQuality } from "./features";
 import {
   SIMULATION_CONFIG,
   DEFAULT_PRESET_MODE,
-} from "@/configs/simulation.config";
+} from "@/config/simulation.config";
 
 export type QualityLevel = RayTracingQuality;
 

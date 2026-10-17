@@ -13,12 +13,8 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import { PerformanceMonitor } from "@/performance/monitor";
-import {
-  type FeatureToggles,
-  type PresetName,
-  getPreset,
-  DEFAULT_FEATURES,
-} from "@/types/features";
+import type { FeatureToggles, PresetName } from "@/types/features";
+import { getPreset, DEFAULT_FEATURES } from "@/config/feature-flags";
 import type { SimulationParams } from "@/types/simulation";
 
 /**

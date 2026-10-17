@@ -39,6 +39,8 @@ const createMockGL = () => {
     deleteFramebuffer: vi.fn(),
     deleteTexture: vi.fn(),
     deleteProgram: vi.fn(),
+    clearColor: vi.fn(),
+    clear: vi.fn(),
     // Constants
     VERTEX_SHADER: 35633,
     FRAGMENT_SHADER: 35632,
@@ -55,6 +57,7 @@ const createMockGL = () => {
     FRAMEBUFFER_COMPLETE: 36053,
     TRIANGLES: 4,
     TEXTURE0: 33984,
+    COLOR_BUFFER_BIT: 16384,
   } as unknown as WebGL2RenderingContext;
 };
 
@@ -71,6 +74,48 @@ describe("Rendering Pipeline", () => {
     expect(success).toBe(true);
     expect(gl.createFramebuffer).toHaveBeenCalled();
     expect(gl.createTexture).toHaveBeenCalled();
+  });
+
+  // Regression: the half/quarter dimensions and the combine viewport used to
+  // be assigned only in resize(), so a plain initialize() left them at zero.
+  // The bright pass then rendered into a 1x1 corner and the combine pass was
+  // issued with a 0x0 viewport (nothing presented -> black/garbage canvas).
+  it("BloomManager derives pass sizes and present viewport at init", () => {
+    const bloom = new BloomManager(gl);
+    expect(bloom.initialize(800, 600)).toBe(true);
+    bloom.updateConfig({ enabled: true });
+    bloom.beginScene(true);
+
+    const sceneTexture = bloom.getSceneTexture();
+    expect(sceneTexture).not.toBeNull();
+    bloom.applyBloomToTexture(sceneTexture as WebGLTexture, 1);
+
+    const viewport = vi.mocked(gl.viewport);
+    const calls = viewport.mock.calls.map((c) => c.slice(2));
+    expect(calls).toContainEqual([400, 300]); // bright pass (1/2 res)
+    expect(calls).toContainEqual([200, 150]); // blur pass (1/4 res)
+    expect(calls).toContainEqual([800, 600]); // combine -> backbuffer (full)
+    expect(calls).not.toContainEqual([1, 1]);
+    expect(calls).not.toContainEqual([0, 0, 0, 0]);
+  });
+
+  it("BloomManager renders the scene at its full size after init", () => {
+    const bloom = new BloomManager(gl);
+    bloom.initialize(800, 600);
+    bloom.beginScene(true);
+    bloom.drawTextureToScreen(bloom.getSceneTexture() as WebGLTexture, 1);
+
+    expect(vi.mocked(gl.viewport)).toHaveBeenCalledWith(0, 0, 800, 600);
+  });
+
+  it("BloomManager keeps correct sizes after a resize", () => {
+    const bloom = new BloomManager(gl);
+    bloom.initialize(800, 600);
+    bloom.resize(1000, 500);
+    bloom.beginScene(true);
+    bloom.drawTextureToScreen(bloom.getSceneTexture() as WebGLTexture, 1);
+
+    expect(vi.mocked(gl.viewport)).toHaveBeenCalledWith(0, 0, 1000, 500);
   });
 
   it("BloomManager returns null and logs warning if FBO missing", () => {

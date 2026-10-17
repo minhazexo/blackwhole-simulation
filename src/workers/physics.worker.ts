@@ -13,6 +13,7 @@ interface WorkerInitialData {
 let engine: import("blackhole-physics").PhysicsEngine | null = null;
 let sab: SharedArrayBuffer | null = null;
 let lastTickTime = 0;
+let lastHeartbeatTime = 0;
 
 import { OFFSETS } from "@/engine/sab-schema";
 
@@ -113,69 +114,89 @@ let wasmF32: Float32Array | null = null;
 let lastBufferLength = 0;
 
 function calculate() {
-  if (!engine || !sab) return;
+  try {
+    if (!engine || !sab) return;
 
-  const currentTime = performance.now();
-  const dt = (currentTime - lastTickTime) / 1000;
-  lastTickTime = currentTime;
+    const currentTime = performance.now();
+    const dt = (currentTime - lastTickTime) / 1000;
+    lastTickTime = currentTime;
 
-  // 1. REBIND PERSISTENT VIEWS (Phase 2.1: Memory Guard)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const memory = (self as any).wasmMemory as WebAssembly.Memory;
-  const currentBuffer = memory.buffer;
-  if (!wasmF32 || currentBuffer.byteLength !== lastBufferLength) {
-    wasmF32 = new Float32Array(currentBuffer);
-    lastBufferLength = currentBuffer.byteLength;
+    // 1. REBIND PERSISTENT VIEWS (Phase 2.1: Memory Guard)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const memory = (self as any).wasmMemory as WebAssembly.Memory;
+    const currentBuffer = memory.buffer;
+    if (!wasmF32 || currentBuffer.byteLength !== lastBufferLength) {
+      wasmF32 = new Float32Array(currentBuffer);
+      lastBufferLength = currentBuffer.byteLength;
+    }
+
+    // 2. READ INPUTS FROM SHARED BUFFER
+    const mouse_dx = sabControlView[1] ?? 0;
+    const mouse_dy = sabControlView[2] ?? 0;
+    const zoom_delta = sabControlView[3] ?? 0;
+
+    // 3. IDLE DETECTION
+    const hasInput =
+      Math.abs(mouse_dx) > 0.0001 ||
+      Math.abs(mouse_dy) > 0.0001 ||
+      Math.abs(zoom_delta) > 0.0001;
+    if (hasInput) {
+      isIdle = false;
+      idleStartTime = currentTime;
+    } else if (!isIdle && currentTime - idleStartTime > IDLE_THRESHOLD_MS) {
+      isIdle = true;
+    }
+
+    // 4. RUN PHYSICS
+    // The "Anti-Spiral" logic: Clamp DT to prevent integration explosions
+    const clampedDt = Math.min(dt, 0.033);
+    engine.tick_sab(clampedDt);
+
+    // 5. SYNC TO SHARED BUFFER (Anti-Tearing)
+    // Primary Sequence increment (Signals "Write Started")
+    Atomics.add(sabSequenceView, OFFSETS.TELEMETRY, 1);
+
+    const wasmSABPtr = engine.get_sab_ptr();
+    const startIdx = wasmSABPtr / 4;
+
+    // Zero-Copy Bulk Transfer
+    sabCameraView.set(
+      wasmF32.subarray(startIdx + OFFSETS.CAMERA, startIdx + OFFSETS.PHYSICS),
+    );
+    sabPhysicsView.set(
+      wasmF32.subarray(
+        startIdx + OFFSETS.PHYSICS,
+        startIdx + OFFSETS.TELEMETRY,
+      ),
+    );
+
+    // Secondary Sequence increment (Signals "Write Complete")
+    Atomics.add(sabSequenceView, OFFSETS.TELEMETRY, 1);
+
+    // Keep liveness independent from the render loop. The bridge uses this
+    // low-rate signal to distinguish a healthy worker from a stalled reader.
+    if (currentTime - lastHeartbeatTime >= 1000) {
+      lastHeartbeatTime = currentTime;
+      self.postMessage({ type: "HEARTBEAT" });
+    }
+
+    // High-Precision Loop Control
+    // Active: 75 Hz (adequate for 60 FPS rendering with margin, ~37% less CPU than 120 Hz)
+    // Idle: 1 Hz when input is quiet for IDLE_THRESHOLD_MS or when the tab
+    //       is hidden (Page Visibility API signal from main thread).
+    const targetHz = isIdle || tabHidden ? 1 : 75;
+    const targetDelay = 1000 / targetHz;
+    const processingTime = performance.now() - currentTime;
+    const finalDelay = Math.max(0, targetDelay - processingTime);
+
+    setTimeout(calculate, finalDelay);
+  } catch (err: unknown) {
+    // SILENT-FAILURE FIX: a throw used to kill the setTimeout chain with no
+    // signal to the main thread. Report it and stop ticking — the bridge
+    // owns restart via restartWorker().
+    const message = err instanceof Error ? err.message : String(err);
+    // eslint-disable-next-line no-console
+    console.error("Physics Worker tick failed:", err);
+    self.postMessage({ type: "ERROR", error: message, fatal: true });
   }
-
-  // 2. READ INPUTS FROM SHARED BUFFER
-  const mouse_dx = sabControlView[1] ?? 0;
-  const mouse_dy = sabControlView[2] ?? 0;
-  const zoom_delta = sabControlView[3] ?? 0;
-
-  // 3. IDLE DETECTION
-  const hasInput =
-    Math.abs(mouse_dx) > 0.0001 ||
-    Math.abs(mouse_dy) > 0.0001 ||
-    Math.abs(zoom_delta) > 0.0001;
-  if (hasInput) {
-    isIdle = false;
-    idleStartTime = currentTime;
-  } else if (!isIdle && currentTime - idleStartTime > IDLE_THRESHOLD_MS) {
-    isIdle = true;
-  }
-
-  // 4. RUN PHYSICS
-  // The "Anti-Spiral" logic: Clamp DT to prevent integration explosions
-  const clampedDt = Math.min(dt, 0.033);
-  engine.tick_sab(clampedDt);
-
-  // 5. SYNC TO SHARED BUFFER (Anti-Tearing)
-  // Primary Sequence increment (Signals "Write Started")
-  Atomics.add(sabSequenceView, OFFSETS.TELEMETRY, 1);
-
-  const wasmSABPtr = engine.get_sab_ptr();
-  const startIdx = wasmSABPtr / 4;
-
-  // Zero-Copy Bulk Transfer
-  sabCameraView.set(
-    wasmF32.subarray(startIdx + OFFSETS.CAMERA, startIdx + OFFSETS.PHYSICS),
-  );
-  sabPhysicsView.set(
-    wasmF32.subarray(startIdx + OFFSETS.PHYSICS, startIdx + OFFSETS.TELEMETRY),
-  );
-
-  // Secondary Sequence increment (Signals "Write Complete")
-  Atomics.add(sabSequenceView, OFFSETS.TELEMETRY, 1);
-
-  // High-Precision Loop Control
-  // Active: 75 Hz (adequate for 60 FPS rendering with margin, ~37% less CPU than 120 Hz)
-  // Idle: 1 Hz when input is quiet for IDLE_THRESHOLD_MS or when the tab
-  //       is hidden (Page Visibility API signal from main thread).
-  const targetHz = isIdle || tabHidden ? 1 : 75;
-  const targetDelay = 1000 / targetHz;
-  const processingTime = performance.now() - currentTime;
-  const finalDelay = Math.max(0, targetDelay - processingTime);
-
-  setTimeout(calculate, finalDelay);
 }

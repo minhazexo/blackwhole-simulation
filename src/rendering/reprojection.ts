@@ -116,7 +116,25 @@ export class ReprojectionManager {
     this.pongTexture = this.createTexture(width, height);
     this.pongFramebuffer = this.createFramebuffer(this.pongTexture);
 
+    // Fresh history: textures are allocated with `null` data, so the first
+    // resolve would otherwise blend the scene against undefined VRAM (and a
+    // resize would keep a stale, differently-sized history image). Also
+    // restart the ping-pong parity so read/write never alias.
+    this.currentWriteIndex = 0;
+    this.clearTarget(this.pingFramebuffer);
+    this.clearTarget(this.pongFramebuffer);
+
     this.isInitialized = true;
+  }
+
+  /** Zero a render target (see resize above). */
+  private clearTarget(framebuffer: WebGLFramebuffer | null): void {
+    if (!framebuffer) return;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   private createTexture(width: number, height: number): WebGLTexture | null {
@@ -281,6 +299,20 @@ export class ReprojectionManager {
 
     // 5. Swap ping-pong for next frame
     this.currentWriteIndex = 1 - this.currentWriteIndex;
+  }
+
+  /**
+   * Discard accumulated history and restart the ping-pong parity.
+   *
+   * Needed whenever the TAA pass has not run for a while (bypass latched,
+   * feature toggle, resize, context restore): whatever is still in the
+   * history texture is stale and would be blended into the next frame.
+   */
+  public resetHistory(): void {
+    if (!this.isInitialized) return;
+    this.currentWriteIndex = 0;
+    this.clearTarget(this.pingFramebuffer);
+    this.clearTarget(this.pongFramebuffer);
   }
 
   /**

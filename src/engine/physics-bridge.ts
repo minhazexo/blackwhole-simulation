@@ -1,11 +1,64 @@
 export { OFFSETS, BLOCK_FLOATS, TELEMETRY_SLOTS } from "./sab-schema";
 import { OFFSETS } from "./sab-schema";
+import {
+  horizonRadius,
+  iscoRadius,
+  photonSphere,
+  shadowRadius,
+} from "@/physics/kerr";
+
+interface WasmPhysicsEngine {
+  tick_sab(dt: number): void;
+  update_params(mass: number, spin: number): void;
+  set_camera_state(
+    x: number,
+    y: number,
+    z: number,
+    lx: number,
+    ly: number,
+    lz: number,
+  ): void;
+  set_auto_spin(enabled: boolean): void;
+  get_sab_ptr(): number;
+  generate_disk_lut(): Float32Array;
+  generate_spectrum_lut(
+    width: number,
+    height: number,
+    maxTemp: number,
+  ): Float32Array;
+  compute_horizon(): number;
+  compute_isco(): number;
+  compute_photon_sphere(): number;
+  compute_dilation(r: number): number;
+  generate_embedding_mesh(
+    rMin: number,
+    rMax: number,
+    nRadial: number,
+    nAngular: number,
+  ): Float32Array;
+  generate_ergosphere_mesh(nPolar: number, nAzimuthal: number): Float32Array;
+  compute_shadow_curve(thetaObs: number, nPoints: number): Float32Array;
+  compute_disk_flux(r: number): number;
+  compute_g_factor(r: number, lambda: number): number;
+  compute_shadow_radius(): number;
+  memory: WebAssembly.Memory;
+}
+
+interface WasmModule {
+  default(): Promise<{ memory: WebAssembly.Memory }>;
+  PhysicsEngine: new (mass: number, spin: number) => WasmPhysicsEngine;
+}
+
+export type PhysicsStatus =
+  | "initializing"
+  | "worker"
+  | "fallback"
+  | "degraded"
+  | "failed";
 
 export class PhysicsBridge {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private engine: any = null;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private wasmModule: any = null;
+  private engine: WasmPhysicsEngine | null = null;
+  private wasmModule: WasmModule | null = null;
   private worker: Worker | null = null;
   private workerReady = false; // BUG FIX: Only true after WASM loads inside worker
   private initializationPromise: Promise<void> | null = null;
@@ -32,7 +85,41 @@ export class PhysicsBridge {
   private seqView: Int32Array | null = null;
   private lastSeenSequence: number = -1;
 
+  // Status model + watchdog liveness tracking
+  private status: PhysicsStatus = "initializing";
+  private statusListeners = new Set<(s: PhysicsStatus) => void>();
+  private lastSequenceChangeMs: number = 0;
+  private restartInProgress: Promise<void> | null = null;
+  private lastWorkerError: string | null = null;
+
   private readonly MAX_RETRIES = 3;
+
+  public getStatus(): PhysicsStatus {
+    return this.status;
+  }
+
+  public getLastWorkerError(): string | null {
+    return this.lastWorkerError;
+  }
+
+  public onStatusChange(cb: (s: PhysicsStatus) => void): () => void {
+    this.statusListeners.add(cb);
+    return () => {
+      this.statusListeners.delete(cb);
+    };
+  }
+
+  private setStatus(next: PhysicsStatus): void {
+    if (this.status === next) return;
+    this.status = next;
+    for (const cb of this.statusListeners) {
+      try {
+        cb(next);
+      } catch {
+        // Ignore listener errors so one bad subscriber can't break the bridge.
+      }
+    }
+  }
 
   public async initialize(): Promise<void> {
     if (this.initializationPromise) return this.initializationPromise;
@@ -74,14 +161,17 @@ export class PhysicsBridge {
     try {
       // eslint-disable-next-line no-console
       console.log("PhysicsBridge Fallback: Loading in main thread...");
-      const wasmModuleWrap = await import("blackhole-physics");
-      const wasmModule = await wasmModuleWrap.default();
-      this.wasmMemory = wasmModule.memory;
+      const wasmModuleWrap =
+        (await import("blackhole-physics")) as unknown as WasmModule;
+      const init = await wasmModuleWrap.default();
+      this.wasmMemory = init.memory;
       this.engine = new wasmModuleWrap.PhysicsEngine(1.0, 0.9);
       this.initializeFallbackViews();
       this.workerReady = true;
+      this.setStatus("fallback");
     } catch (fallbackErr) {
       this.initializationPromise = null; // Allow re-initialization attempt
+      this.setStatus("failed");
       throw fallbackErr;
     }
   }
@@ -119,14 +209,30 @@ export class PhysicsBridge {
           // eslint-disable-next-line no-console
           console.log("PhysicsBridge: Worker Ready.");
           this.workerReady = true;
+          this.lastSequenceChangeMs = Date.now();
+          this.setStatus("worker");
           resolve();
+        } else if (e.data.type === "HEARTBEAT") {
+          this.lastSequenceChangeMs = Date.now();
         } else if (e.data.type === "ERROR") {
+          this.lastWorkerError = String(e.data.error || "Unknown worker error");
+          // A fatal post-init ERROR means the worker's setTimeout chain
+          // died. Flip to degraded so the UI can show a banner; the init
+          // reject below is a no-op after resolve but keeps retry logic
+          // intact when the failure happens during startup.
+          if (e.data?.fatal) {
+            this.setStatus("degraded");
+          }
           clearTimeout(timeout);
           reject(e.data.error);
         }
       };
 
       this.worker.onerror = (err) => {
+        this.lastWorkerError = `Worker error event: ${err.message}`;
+        if (this.workerReady) {
+          this.setStatus("degraded");
+        }
         clearTimeout(timeout);
         reject(new Error(`Worker error event: ${err.message}`));
       };
@@ -210,6 +316,45 @@ export class PhysicsBridge {
   }
 
   /**
+   * Manually restart the physics worker after a fatal crash or watchdog
+   * stall. Terminates the existing worker, resets liveness state, and
+   * re-runs initializeWorker() for a single attempt. Concurrent calls share
+   * the same in-flight promise (guarded by flag); the UI may call this
+   * repeatedly via Retry — each settled call allows a fresh attempt.
+   * On failure the status flips to "failed".
+   */
+  public async restartWorker(): Promise<void> {
+    if (this.restartInProgress) return this.restartInProgress;
+
+    const attempt = (async () => {
+      try {
+        if (this.worker) {
+          try {
+            this.worker.terminate();
+          } catch {
+            // Ignore termination errors — we're replacing the worker anyway.
+          }
+          this.worker = null;
+        }
+        this.workerReady = false;
+        this.lastSeenSequence = -1;
+        this.lastSequenceChangeMs = Date.now();
+        this.setStatus("initializing");
+        await this.initializeWorker();
+        // initializeWorker sets status to "worker" on READY.
+      } catch (err) {
+        this.setStatus("failed");
+        throw err;
+      } finally {
+        this.restartInProgress = null;
+      }
+    })();
+
+    this.restartInProgress = attempt;
+    return attempt;
+  }
+
+  /**
    * Primary Telemetry Hook. Reads camera and physics state from SAB.
    * This is called 60+ times per second in the animation loop.
    *
@@ -222,6 +367,24 @@ export class PhysicsBridge {
     dt: number,
   ): { camera: Float32Array; physics: Float32Array } | null {
     if (this.worker && this.sab && this.seqView) {
+      // Watchdog: the per-tick SAB sequence increments are the worker's
+      // liveness signal. If the worker path is active and the tab is
+      // visible but the sequence hasn't advanced in >5s, the worker loop
+      // has died silently — surface degraded status. Notify only on
+      // transition (setStatus dedupes). Never auto-restart here (rAF
+      // context); the UI restarts via restartWorker().
+      const now = Date.now();
+      if (this.lastSequenceChangeMs === 0) {
+        this.lastSequenceChangeMs = now;
+      } else if (this.workerReady) {
+        const visible =
+          typeof document === "undefined" ||
+          document.visibilityState === "visible";
+        if (visible && now - this.lastSequenceChangeMs > 5000) {
+          this.setStatus("degraded");
+        }
+      }
+
       // 1. Write the current frame delta to the shared control block
       this.controlView[4] = dt;
 
@@ -256,6 +419,7 @@ export class PhysicsBridge {
       this._lastGoodCamera.set(camera);
       this._lastGoodPhysics.set(physics);
       this.lastSeenSequence = seq1;
+      this.lastSequenceChangeMs = now;
 
       return { camera: this._lastGoodCamera, physics: this._lastGoodPhysics };
     }
@@ -347,15 +511,21 @@ export class PhysicsBridge {
   }
 
   public computeHorizon(): number {
-    return this.engine ? this.engine.compute_horizon() : 2.0;
+    return this.engine
+      ? this.engine.compute_horizon()
+      : horizonRadius(this.currentMass, this.currentSpin);
   }
 
   public computeISCO(): number {
-    return this.engine ? this.engine.compute_isco() : 6.0;
+    return this.engine
+      ? this.engine.compute_isco()
+      : iscoRadius(this.currentMass, this.currentSpin);
   }
 
   public computePhotonSphere(): number {
-    return this.engine ? this.engine.compute_photon_sphere() : 3.0;
+    return this.engine
+      ? this.engine.compute_photon_sphere()
+      : photonSphere(this.currentMass, this.currentSpin);
   }
 
   public computeDilation(r: number): number {
@@ -457,11 +627,11 @@ export class PhysicsBridge {
 
   /** Schwarzschild shadow radius (critical impact parameter). */
   public computeShadowRadius(): number {
-    if (!this.engine) return 3 * Math.sqrt(3) * this.currentMass;
+    if (!this.engine) return shadowRadius(this.currentMass);
     try {
       return this.engine.compute_shadow_radius();
     } catch {
-      return 3 * Math.sqrt(3) * this.currentMass;
+      return shadowRadius(this.currentMass);
     }
   }
 

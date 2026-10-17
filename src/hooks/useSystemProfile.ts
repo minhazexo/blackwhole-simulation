@@ -13,8 +13,10 @@
 import { useState, useEffect, useRef } from "react";
 import { runStressTest, type StressTestResult } from "@/performance/stress-test";
 import { buildDeviceProfile, type DeviceCapabilityProfile } from "@/utils/device-detection";
-import { PERFORMANCE_CONFIG } from "@/configs/performance.config";
-import { getPreset, type PresetName, type FeatureToggles } from "@/types/features";
+import { PERFORMANCE_CONFIG } from "@/config/performance.config";
+import { DEFAULT_PRESET_MODE } from "@/config/simulation.config";
+import type { PresetName, FeatureToggles } from "@/types/features";
+import { getPreset } from "@/config/feature-flags";
 
 export type ProfileStage =
   | "detecting-hardware"
@@ -109,8 +111,8 @@ export function useSystemProfile() {
   const [profile, setProfile] = useState<SystemProfile>({
     capability: null,
     stressTest: null,
-    recommendedPreset: "balanced",
-    recommendedFeatures: getPreset("balanced"),
+    recommendedPreset: DEFAULT_PRESET_MODE,
+    recommendedFeatures: getPreset(DEFAULT_PRESET_MODE),
     stage: "detecting-hardware",
   });
 
@@ -127,6 +129,16 @@ export function useSystemProfile() {
 
     // Single orchestration function that runs all stages sequentially.
     async function calibrate() {
+      // Yield to a macrotask before starting. Two reasons: (1) dev
+      // StrictMode runs mount effects, cleanups, and re-mounts back to
+      // back — starting synchronously lets the dead mount's probe block
+      // the thread and resolve anyway, producing a SECOND preset that a
+      // per-mount guard cannot stop (each mount has fresh refs). With the
+      // yield, the dead mount's cleanup flips its flag first and it aborts
+      // before measuring. (2) It lets WASM download + canvas init settle
+      // so the probe measures the GPU, not boot contention.
+      await new Promise<void>((r) => setTimeout(r, 250));
+      if (!mountedRef.current) return;
       try {
         // ── Stage 1: Detect hardware ──
         const probeCanvas = document.createElement("canvas");
@@ -223,43 +235,37 @@ function determineOptimalPreset(
 ): PresetName {
   const cfg = PERFORMANCE_CONFIG.startup;
 
-  // ── Fallback: no reliable stress test → guess from hardware ──
+  // ── Fallback: no reliable stress test → default to the project preset ──
+  // (high-quality / photo-1). The runtime governor still steps down if the
+  // device genuinely cannot sustain it, so this is safe on weaker hardware.
   if (!stressTest?.reliable) {
-    if (capability) {
-      if (capability.gpuVendor === "nvidia" || capability.gpuVendor === "amd") {
-        return "high-quality";
-      }
-      if (capability.gpuVendor === "apple" && !capability.isMobile) {
-        return "high-quality";
-      }
-      if (capability.deviceMemoryGB >= 8 && capability.hardwareConcurrency >= 8) {
-        return "high-quality";
-      }
-      if (capability.isMobile) {
-        return "balanced";
-      }
+    if (capability?.isMobile) {
+      return "balanced";
     }
-    return "balanced";
+    return DEFAULT_PRESET_MODE;
   }
 
   // ── Use stress test FPS thresholds ──
   const avgFps = stressTest.averageFPS;
-  let recommended: PresetName;
+  let recommended: PresetName = DEFAULT_PRESET_MODE;
 
   if (avgFps >= cfg.ultraThreshold) {
     recommended = "ultra-quality";
   } else if (avgFps >= cfg.highThreshold) {
     recommended = "high-quality";
-  } else if (avgFps >= cfg.balancedThreshold) {
+  } else if (avgFps < cfg.balancedThreshold) {
+    // Genuinely too slow even for the balanced probe rung.
     recommended = "balanced";
-  } else {
-    recommended = "maximum-performance";
   }
+  // Otherwise (balancedThreshold ≤ fps < highThreshold): keep the default
+  // high-quality preset and let the runtime governor fine-tune/rescue.
 
   // ── Mobile / integrated GPU hard cap ──
   if (capability?.isMobile || capability?.hasIntegratedGPU) {
     if (recommended === "ultra-quality") {
       recommended = "high-quality";
+    } else if (recommended === "high-quality") {
+      recommended = "balanced";
     }
   }
 

@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import * as THREE from "three";
+import { ergosphereRadius, horizonRadius } from "@/physics/kerr";
 
 interface ErgosphereMeshProps {
   mass: number;
@@ -30,10 +31,6 @@ export function ErgosphereMesh({
   opacity = 0.25,
 }: ErgosphereMeshProps) {
   const geometry = useMemo(() => {
-    const a = Math.abs(spin) * mass;
-    const a2 = a * a;
-    const rh = mass + Math.sqrt(Math.max(0, mass * mass - a2));
-
     const vertices: number[] = [];
     const normals: number[] = [];
     const indices: number[] = [];
@@ -43,9 +40,8 @@ export function ErgosphereMesh({
       const cosT = Math.cos(theta);
       const sinT = Math.sin(theta);
 
-      // Ergosphere radius
-      const disc = mass * mass - a2 * cosT * cosT;
-      const rErgo = mass + Math.sqrt(Math.max(0, disc));
+      // Ergosphere radius (single-source Kerr math)
+      const rErgo = ergosphereRadius(mass, spin, cosT);
 
       for (let j = 0; j <= nAzimuthal; j++) {
         const phi = (j / nAzimuthal) * Math.PI * 2;
@@ -82,10 +78,7 @@ export function ErgosphereMesh({
   }, [mass, spin, nPolar, nAzimuthal]);
 
   // Event horizon sphere (inner)
-  const horizonRadius = useMemo(() => {
-    const a = Math.abs(spin) * mass;
-    return mass + Math.sqrt(Math.max(0, mass * mass - a * a));
-  }, [mass, spin]);
+  const horizon = useMemo(() => horizonRadius(mass, spin), [mass, spin]);
 
   return (
     <group>
@@ -102,7 +95,7 @@ export function ErgosphereMesh({
 
       {/* Event horizon (inner, opaque black sphere) */}
       <mesh>
-        <sphereGeometry args={[horizonRadius, 32, 32]} />
+        <sphereGeometry args={[horizon, 32, 32]} />
         <meshBasicMaterial color="#000000" />
       </mesh>
     </group>

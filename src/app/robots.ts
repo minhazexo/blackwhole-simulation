@@ -1,5 +1,7 @@
 import { MetadataRoute } from "next";
 
+import { SITE_URL } from "@/seo/site";
+
 export default function robots(): MetadataRoute.Robots {
   return {
     rules: {
@@ -7,6 +9,6 @@ export default function robots(): MetadataRoute.Robots {
       allow: "/",
       disallow: "/private/",
     },
-    sitemap: "https://blackhole-simulation.vercel.app/sitemap.xml",
+    sitemap: `${SITE_URL}/sitemap.xml`,
   };
 }

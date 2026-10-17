@@ -90,6 +90,29 @@
     -webkit-user-select: none;
     user-select: none;
   }
+
+  /* Smoothness: promote fullscreen canvases to their own compositor
+     layer so the GPU can present without re-rasterizing UI. */
+  canvas {
+    transform: translateZ(0);
+    will-change: transform;
+  }
+
+  /* Defer offscreen heavy panels (control panel tabs, spectrum charts)
+     until scrolled into view — saves initial raster cost. */
+  .defer-raster {
+    content-visibility: auto;
+    contain-intrinsic-size: auto 400px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 /* Liquid Glass Utilities */
@@ -156,6 +179,30 @@
     -webkit-backdrop-filter: blur(3px) saturate(140%);
     border: 1px solid rgba(255, 255, 255, 0.08);
     box-shadow: 0 10px 40px rgba(0, 0, 0, 0.4);
+  }
+
+  /* ── Reduced-blur mode (data-perf-degraded="true" on the app root) ──
+     backdrop-filter: blur() forces the browser to re-blur the backdrop
+     every frame the canvas paints — over a fullscreen ray-marched canvas
+     that is 10-20fps on integrated/mobile GPUs. In degraded mode every
+     blurred surface falls back to a flat translucent fill: same layout,
+     same borders, zero per-frame blur cost. Attribute+class specificity
+     (0,2,0) beats the Tailwind single-class utilities, so no !important
+     is needed. .liquid-glass is intentionally untouched (saturate-only,
+     no blur — cheap). */
+  [data-perf-degraded="true"] .glass-panel,
+  [data-perf-degraded="true"] .frosted-glass-apple,
+  [data-perf-degraded="true"] .glass-subtle-frost {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+    background: rgba(0, 0, 0, 0.78);
+  }
+
+  [data-perf-degraded="true"] .backdrop-blur-sm,
+  [data-perf-degraded="true"] .backdrop-blur-md,
+  [data-perf-degraded="true"] .backdrop-blur-xl {
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
   }
 }
 

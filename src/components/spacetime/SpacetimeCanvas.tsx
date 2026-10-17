@@ -8,6 +8,12 @@ import { VolumetricGrid } from "./VolumetricGrid";
 import { ErgosphereMesh } from "./ErgosphereMesh";
 import { LightCones } from "./LightCones";
 import { FrameDragField } from "./FrameDragField";
+import {
+  ergosphereRadius,
+  horizonRadius,
+  iscoRadius,
+  photonSphere,
+} from "@/physics/kerr";
 
 type VisualizationMode =
   | "volumetric"
@@ -163,11 +169,7 @@ export function SpacetimeCanvas({
         <div>
           r_h ={" "}
           <span style={{ color: "#ff8866" }}>
-            {(
-              mass +
-              Math.sqrt(Math.max(0, mass * mass - spin * spin * mass * mass))
-            ).toFixed(3)}
-            M
+            {horizonRadius(mass, spin).toFixed(3)}M
           </span>
         </div>
       </div>
@@ -199,14 +201,7 @@ export function SpacetimeCanvas({
               {/* Reference horizon sphere */}
               <mesh>
                 <sphereGeometry
-                  args={[
-                    mass +
-                      Math.sqrt(
-                        Math.max(0, mass * mass - spin * spin * mass * mass),
-                      ),
-                    24,
-                    24,
-                  ]}
+                  args={[horizonRadius(mass, spin), 24, 24]}
                 />
                 <meshBasicMaterial color="#000000" />
               </mesh>
@@ -218,14 +213,7 @@ export function SpacetimeCanvas({
               <FrameDragField mass={mass} spin={spin} />
               <mesh>
                 <sphereGeometry
-                  args={[
-                    mass +
-                      Math.sqrt(
-                        Math.max(0, mass * mass - spin * spin * mass * mass),
-                      ),
-                    24,
-                    24,
-                  ]}
+                  args={[horizonRadius(mass, spin), 24, 24]}
                 />
                 <meshBasicMaterial color="#111" />
               </mesh>
@@ -269,27 +257,10 @@ function GroundGrid() {
  * These are drawn as thin circles in the equatorial plane.
  */
 function ReferenceRings({ mass, spin }: { mass: number; spin: number }) {
-  const a = Math.abs(spin) * mass;
-  const a2 = a * a;
-
-  // ISCO (exact Bardeen-Press-Teukolsky)
-  const absS = Math.abs(spin);
-  const z1 =
-    1 +
-    Math.pow(1 - absS * absS, 1 / 3) *
-      (Math.pow(1 + absS, 1 / 3) + Math.pow(1 - absS, 1 / 3));
-  const z2 = Math.sqrt(3 * absS * absS + z1 * z1);
-  const isco =
-    absS < 0.001
-      ? 6 * mass
-      : mass * (3 + z2 - Math.sqrt((3 - z1) * (3 + z1 + 2 * z2)));
-
-  // Photon sphere
-  const aStarClamped = Math.min(Math.max(-spin, -0.9999), 0.9999);
-  const rPh = 2 * mass * (1 + Math.cos((2 / 3) * Math.acos(-aStarClamped)));
-
-  // Ergosphere at equator
-  const rErgo = mass + Math.sqrt(Math.max(0, mass * mass - a2));
+  const isco = iscoRadius(mass, spin);
+  const rPh = photonSphere(mass, spin);
+  // Ergosphere at equator (cosTheta = 0)
+  const rErgo = ergosphereRadius(mass, spin, 0);
 
   return (
     <group>

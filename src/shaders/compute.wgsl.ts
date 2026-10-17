@@ -1,5 +1,5 @@
 const computeShader = `
-// src/shaders/compute.wgsl
+// src/shaders/compute.wgsl.ts
 // Wavefront Compute Kernel: Ingoing Kerr-Schild Geodesics
 
 // --- Bindings ---

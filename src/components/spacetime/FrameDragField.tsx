@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import * as THREE from "three";
+import { horizonRadius } from "@/physics/kerr";
 
 interface FrameDragFieldProps {
   mass: number;
@@ -46,7 +47,7 @@ export function FrameDragField({
     const M = mass;
     const a = spin * M;
     const a2 = a * a;
-    const rh = M + Math.sqrt(Math.max(0, M * M - a2));
+    const rh = horizonRadius(M, spin);
 
     if (Math.abs(spin) < 0.01) return [];
 

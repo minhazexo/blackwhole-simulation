@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { isInAppBrowser, isSoftwareWebGL } from "@/utils/device-detection";
 
 export interface HardwareSupport {
   webgl: boolean;
@@ -6,6 +7,10 @@ export interface HardwareSupport {
   isInApp: boolean;
   isReady: boolean;
   error?: string;
+  /** True if WebGL is running in software/CPU mode (extremely slow) */
+  isSoftwareWebGL?: boolean;
+  /** WebGL renderer string for diagnostics */
+  webglRenderer?: string;
 }
 
 export function useHardwareSupport() {
@@ -21,18 +26,28 @@ export function useHardwareSupport() {
 
     const checkSupport = async () => {
       // 1. Detect In-App browsers (Instagram, FB, LinkedIn, etc.)
-      const ua = navigator.userAgent;
-      const isInApp =
-        /Instagram|FBAN|FBAV|LinkedIn|Threads|Messenger|Line|Twitter|MicroMessenger/i.test(
-          ua,
-        );
+      const isInApp = isInAppBrowser();
 
       // 2. Check WebGL 2 (Required for 3D textures and float buffers)
       let webgl = false;
+      let isSoftware = false;
+      let renderer = "";
       try {
         const canvas = document.createElement("canvas");
         const gl = canvas.getContext("webgl2");
         webgl = !!gl;
+        if (gl) {
+          isSoftware = isSoftwareWebGL(gl);
+          // Get renderer string
+          try {
+            const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+            if (debugInfo) {
+              renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL));
+            }
+          } catch {
+            // Ignore
+          }
+        }
       } catch (e) {
         webgl = false;
       }
@@ -53,6 +68,8 @@ export function useHardwareSupport() {
         webgpu,
         isInApp,
         isReady: true,
+        isSoftwareWebGL: isSoftware,
+        webglRenderer: renderer,
       });
     };
 

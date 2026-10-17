@@ -4,7 +4,7 @@
  */
 
 import type { FeatureToggles, PresetName } from "@/types/features";
-import { validateFeatureToggles, DEFAULT_FEATURES } from "@/types/features";
+import { validateFeatureToggles, DEFAULT_FEATURES } from "@/config/feature-flags";
 
 /**
  * Storage keys for localStorage

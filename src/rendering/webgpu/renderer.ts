@@ -3,6 +3,7 @@ import {
   PhysicsParams,
   CAMERA_UNIFORM_SIZE,
   PHYSICS_PARAM_SIZE,
+  RAY_PAYLOAD_SIZE,
   writePhysicsParams,
   writeCameraUniforms,
 } from "@/types/webgpu";
@@ -164,7 +165,7 @@ export class WebGPURenderer {
     // Ray Storage (Binding 2)
     // Size depends on max resolution. For now, allocate for 1080p full screen rays?
     const maxRays = 1920 * 1080;
-    const raySize = 80; // from RAY_PAYLOAD_SIZE
+    const raySize = RAY_PAYLOAD_SIZE;
     this.rayBuffer = this.device.createBuffer({
       size: maxRays * raySize,
       usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC,

@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import * as THREE from "three";
+import { horizonRadius } from "@/physics/kerr";
 
 interface VolumetricGridProps {
   mass: number;
@@ -107,7 +108,7 @@ export function VolumetricGrid({
     const v2p = physExtent / halfViz;
     const p2v = halfViz / physExtent;
 
-    const rh = M + Math.sqrt(Math.max(0, M * M - a2));
+    const rh = horizonRadius(M, spin);
     const rMin = rh * 1.06;
 
     const cBase = new THREE.Color(baseColor);
@@ -125,10 +126,6 @@ export function VolumetricGrid({
     const Sigma = (r: number, cosT: number) => r * r + a2 * cosT * cosT;
     const Delta = (r: number) => r * r - 2 * M * r + a2;
 
-    const g_tt = (r: number, cosT: number) => {
-      const sig = Sigma(r, cosT);
-      return -(1 - (2 * M * r) / sig);
-    };
 
     const g_rr = (r: number, cosT: number) => {
       const d = Delta(r);

@@ -6,8 +6,6 @@ const nextConfig = {
   poweredByHeader: false,
   // Strict Mode for better development practices
   reactStrictMode: true,
-  // Compiler: Use SWC for minification
-  swcMinify: true,
 
   // Production Optimizations
   compiler: {
@@ -21,14 +19,10 @@ const nextConfig = {
   },
 
   // Asset Optimization
+  // Tree shake heavy libraries (experimental.* in Next 16 per
+  // api-reference/config/next-config-js/optimizePackageImports)
   experimental: {
-    // Tree shake heavy libraries
-    optimizePackageImports: [
-      "lucide-react",
-      "recharts",
-      "framer-motion",
-      "@radix-ui/react-slider",
-    ],
+    optimizePackageImports: ["lucide-react", "recharts", "framer-motion"],
   },
 
   webpack: (config, { isServer }) => {
@@ -67,6 +61,24 @@ const nextConfig = {
           {
             key: "Cross-Origin-Resource-Policy",
             value: "same-origin",
+          },
+        ],
+      },
+      // Smoothness: WASM physics bundle (~MBs) + immutable Next static
+      // assets cache for a year. Repeat visits skip re-download, so the
+      // loading overlay dismisses faster and first frame arrives sooner.
+      {
+        // NOTE: no forced Content-Type here — /wasm contains both the
+        // .wasm binary and the wasm-pack .js glue. Forcing
+        // application/wasm would break the JS import.
+        // (No rule for /_next/static/*: Next.js already emits its own
+        // immutable Cache-Control there, and overriding it only trips a
+        // dev-mode warning with zero production benefit.)
+        source: "/wasm/:path*.wasm",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=31536000, immutable",
           },
         ],
       },

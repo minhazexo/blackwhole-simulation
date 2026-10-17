@@ -10,19 +10,45 @@ import {
   createTextureFromData,
 } from "@/utils/webgl-utils";
 import { UniformBatcher } from "@/utils/cpu-optimizations";
-import { SIMULATION_CONFIG } from "@/configs/simulation.config";
-import { DEFAULT_FEATURES, getMaxRaySteps } from "@/types/features";
+import { SIMULATION_CONFIG } from "@/config/simulation.config";
+import { DEFAULT_FEATURES, getMaxRaySteps } from "@/config/feature-flags";
+import { isMobileDevice, isSoftwareWebGL } from "@/utils/device-detection";
 import { SimulationParams } from "@/types/simulation";
 import { physicsBridge } from "@/engine/physics-bridge";
-import { PerformanceMonitor } from "@/performance/monitor";
-import { PERFORMANCE_CONFIG } from "@/configs/performance.config";
-import { PHYSICS_CONSTANTS } from "@/configs/physics.config";
+import { liveCamera } from "@/engine/camera-live";
+import {
+  PerformanceMonitor,
+  governorAction,
+  governorStep,
+  QUALITY_LADDER,
+} from "@/performance/monitor";
+import type { RayTracingQuality } from "@/types/features";
+import { PERFORMANCE_CONFIG } from "@/config/performance.config";
+import { PHYSICS_CONSTANTS } from "@/config/physics.config";
 
 export interface WebGLError {
   type: "context" | "shader" | "program" | "memory";
   message: string;
   details?: string;
 }
+
+/**
+ * Simulation-time units advanced per wall-clock second. Calibrated so that
+ * the historic (frame-rate dependent) `time += 0.01` per frame at 60fps
+ * keeps producing the exact same disk rotation / nebula drift speed.
+ */
+const SIMULATION_UNITS_PER_SECOND = 0.6;
+
+/**
+ * Post-processing bypass thresholds (rolling FPS).
+ *
+ * Engage below 52, release above 57. The release MUST stay reachable on a
+ * 60Hz display: the previous value (>60) could never be met once vsync caps
+ * the loop, so a single startup hitch latched TAA + bloom OFF for the whole
+ * session. 52..57 is the hold band (no flapping); 2.5s dwell per side.
+ */
+const POST_BYPASS_ENGAGE_FPS = 52;
+const POST_BYPASS_RELEASE_FPS = 57;
 
 export class WebGLRenderer {
   private gl: WebGL2RenderingContext | null = null;
@@ -37,6 +63,12 @@ export class WebGLRenderer {
   public onMetricsUpdate?: (
     metrics: import("@/performance/monitor").PerformanceMetrics,
   ) => void;
+  /**
+   * Runtime quality-governor signal. Fires at most once per evaluation
+   * interval (2.5s) when the rolling FPS demands a ray-step rung change.
+   * The owner (page.tsx) applies it like a manual quality selection.
+   */
+  public onQualityChange?: (quality: RayTracingQuality) => void;
 
   private noiseTex: WebGLTexture | null = null;
   private blueNoiseTex: WebGLTexture | null = null;
@@ -47,16 +79,51 @@ export class WebGLRenderer {
   private height = 0;
   private time = 0;
   private isCameraMoving = false;
-  private moveTimeout: NodeJS.Timeout | null = null;
   private lastMouse = { x: 0, y: 0 };
+  // Memoized software-WebGL feature override (was a fresh object + fresh
+  // JSON.stringify every frame on the software path).
+  private lastForcedInput: import("@/types/features").FeatureToggles | null =
+    null;
+  private forcedFeatures: import("@/types/features").FeatureToggles | null =
+    null;
   private performanceMonitor = new PerformanceMonitor();
   private lastFrameTime = performance.now();
   private lastMetricsUpdate = 0;
+  // Runtime quality-governor state (see evaluateQualityGovernor).
+  private rendererStartTime = performance.now();
+  private lastGovernorEval = 0;
+  private governorUpStreak = 0;
+  private governorDownStreak = 0;
+  // TAA-bypass latch (see needsOffscreen). Without hysteresis the
+  // direct↔TAA path flapped every time rolling FPS crossed the threshold,
+  // popping the image between raw and temporally-blended frames.
+  private taaBypassed = false;
+  private lastTaaSwitchMs = 0;
+  private governorCeiling: RayTracingQuality = "ultra";
+  private lastSeenQuality: RayTracingQuality | "off" | null = null;
+  private pendingGovernorQuality: RayTracingQuality | null = null;
+  private governorGraceUntil = 0;
+  private lastGovernorStepAt = 0;
+  // Cached features reference: avoids JSON.stringify on every frame when
+  // the features object identity hasn't changed (stringify ran 60x/sec).
+  // Safe because params updates always replace (never mutate) features.
+  private lastFeaturesRef: object | null = null;
+  // Motion detection without per-frame setTimeout churn.
+  private lastMotionTime = 0;
+  // Cached at init: isMobileDevice() runs UA regex + layout reads, so it
+  // must not execute per frame for the mobile resolution cap below.
+  private isMobileDeviceCached = false;
+  // Reused shadow-curve buffer (64 points x 2). Previously allocated via
+  // `new Float32Array(128)` every frame (~60 allocs/sec + GC pauses).
+  private readonly _shadowCurve = new Float32Array(128);
   // Set when EXT_color_buffer_float lights up. False on Safari 16- and
   // some mobile drivers; downstream framebuffers must branch on this
   // to avoid a half/float attachment whose driver silently fails the
   // attachment-completeness check (FRAMEBUFFER_INCOMPLETE_ATTACHMENT).
   public hasFloatFramebuffer = false;
+  // True if WebGL is running in software/CPU mode (llvmpipe, SwiftShader).
+  // Software WebGL is ~100x slower for compute shaders like ray marching.
+  public isSoftwareWebGL = false;
 
   constructor() {}
 
@@ -74,6 +141,17 @@ export class WebGLRenderer {
       return false;
     }
     this.gl = gl;
+
+    // Detect software WebGL (llvmpipe, SwiftShader, ANGLE on CPU)
+    this.isSoftwareWebGL = isSoftwareWebGL(gl);
+    // Cache mobile status once for the per-frame resolution cap below.
+    this.isMobileDeviceCached = isMobileDevice();
+    if (this.isSoftwareWebGL) {
+      // eslint-disable-next-line no-console
+      console.warn(
+        "[renderer] Software WebGL detected (CPU rendering). Performance will be severely limited.",
+      );
+    }
 
     // FIX: Set explicit clear color so TAA history starts from a defined state
     // instead of GPU-dependent garbage. Without this, the first several frames
@@ -98,10 +176,17 @@ export class WebGLRenderer {
     // Thread the float-framebuffer capability flag so bloom/TAA managers
     // can downgrade from RGBA16F to RGBA8 on adapters without
     // EXT_color_buffer_float (Safari ≤16, some mobile drivers).
-    this.bloomManager = new BloomManager(gl, undefined, this.hasFloatFramebuffer);
+    this.bloomManager = new BloomManager(
+      gl,
+      undefined,
+      this.hasFloatFramebuffer,
+    );
     this.bloomManager.initialize(this.width, this.height);
 
-    this.reprojectionManager = new ReprojectionManager(gl, this.hasFloatFramebuffer);
+    this.reprojectionManager = new ReprojectionManager(
+      gl,
+      this.hasFloatFramebuffer,
+    );
     this.reprojectionManager.resize(this.width, this.height);
 
     this.initTextures();
@@ -159,7 +244,11 @@ export class WebGLRenderer {
   private recompileShader(features: import("@/types/features").FeatureToggles) {
     if (!this.gl || !this.shaderManager) return;
     const gl = this.gl;
+    // Identity fast-path: same object as last frame → same key, skip the
+    // JSON.stringify entirely (it ran 60x/sec for an unchanged object).
+    if (features === this.lastFeaturesRef) return;
     const key = JSON.stringify(features);
+    this.lastFeaturesRef = features;
     if (key === this.compiledFeaturesKey) return; // Already compiled
 
     const hasPost = !!(this.bloomManager || this.reprojectionManager);
@@ -174,6 +263,14 @@ export class WebGLRenderer {
       this.program = variant.program;
       this.uniformBatcher.upload(gl, this.program);
       this.compiledFeaturesKey = key;
+      // Dev-only: recompiles hitch the pipeline (~50-200ms) and pop the
+      // image — frequent lines here mean something is churning features.
+      // eslint-disable-next-line no-console
+      console.info(
+        `[shader] recompile quality=${features.rayTracingQuality} ` +
+          `bloom=${features.bloom} lensing=${features.gravitationalLensing} ` +
+          `disk=${features.accretionDisk}`,
+      );
     }
   }
 
@@ -187,71 +284,322 @@ export class WebGLRenderer {
       this.reprojectionManager.resize(width, height);
   }
 
+  /**
+   * Runtime quality governor (~0.33Hz evaluations, 6s warmup).
+   *
+   * Steps the ray-tracing rung down at <25fps rolling, restores up at
+   * >75fps sustained over 4 evaluations, never below "low", never above
+   * the ceiling, never from/to "off", and never during the post-manual-
+   * change grace window. Only active when adaptive resolution is enabled
+   * (adaptive ON = the user consented to automatic tuning).
+   *
+   * Anti-dance design: every fired step freezes evaluations for 8s (lets
+   * the pipeline + rolling window settle and keeps shader-compile hitches
+   * from feeding back), and the 25/75 band is wider than any single rung's
+   * ~2x cost ratio so the governor cannot limit-cycle up/down.
+   */
+  private evaluateQualityGovernor(
+    now: number,
+    currentQuality: RayTracingQuality | string,
+    metrics: { rollingAverageFPS: number },
+    adaptiveEnabled: boolean,
+  ): void {
+    if (!this.onQualityChange || !adaptiveEnabled) {
+      this.governorUpStreak = 0;
+      this.governorDownStreak = 0;
+      return;
+    }
+    if (now - this.rendererStartTime < 6000) return;
+    if (now - this.lastGovernorEval < 3000) return;
+    // Post-step settle freeze: don't even count streaks while the pipeline
+    // is still converging on the last change.
+    if (now - this.lastGovernorStepAt < 8000) return;
+    this.lastGovernorEval = now;
+
+    const action = governorAction(
+      currentQuality,
+      this.governorCeiling,
+      metrics.rollingAverageFPS,
+    );
+    if (action === "hold") {
+      this.governorUpStreak = 0;
+      this.governorDownStreak = 0;
+      return;
+    }
+    if (action === "up") {
+      // Restore conservatively: 4 consecutive healthy evals (~12s).
+      this.governorUpStreak += 1;
+      this.governorDownStreak = 0;
+      if (this.governorUpStreak < 4) return;
+      this.governorUpStreak = 0;
+    } else {
+      // Step down only on 2 consecutive sick evals (~6s): a single bad
+      // window is often a transient hitch (shader compile, GC), and each
+      // rung change pops image sharpness visibly.
+      this.governorDownStreak += 1;
+      this.governorUpStreak = 0;
+      if (this.governorDownStreak < 2) return;
+      this.governorDownStreak = 0;
+      // Respect the post-manual-change grace window for step-downs.
+      if (now < this.governorGraceUntil) return;
+    }
+
+    const rung = (QUALITY_LADDER as readonly string[]).indexOf(currentQuality);
+    if (rung < 0) return;
+    const rungQuality = QUALITY_LADDER[rung];
+    if (!rungQuality) return;
+    const next = governorStep(rungQuality, action);
+    if (next !== currentQuality) {
+      this.pendingGovernorQuality = next;
+      this.lastGovernorStepAt = now;
+      // Dev-only journal (stripped in production by compiler.removeConsole):
+      // each rung change pops sharpness visibly, so every fire must be
+      // explainable from these lines. Paste them if quality "dances".
+      // eslint-disable-next-line no-console
+      console.info(
+        `[auto-tune] quality ${String(currentQuality)}→${next} ` +
+          `@rolling ${Math.round(metrics.rollingAverageFPS)}fps ` +
+          `(ceiling ${String(this.governorCeiling)})`,
+      );
+      this.onQualityChange(next);
+    }
+  }
+
   public render(params: SimulationParams, mouse: { x: number; y: number }) {
     if (!this.gl || !this.program) return;
     const gl = this.gl;
 
-    // 1. Detect Motion for TAA
-    const dx = Math.abs(mouse.x - this.lastMouse.x);
-    const dy = Math.abs(mouse.y - this.lastMouse.y);
+    // Camera UVs for this frame. Prefer the rAF-rate live bus over the
+    // React prop: the prop only refreshes on gated React syncs (~10Hz
+    // idle), which stepped the camera visibly AND made motion detection
+    // stutter (TAA flickering on/off at the sync cadence). Falls back to
+    // the prop before the first live push (seq === 0).
+    const camU =
+      liveCamera.seq > 0 ? liveCamera.theta / (2 * Math.PI) : mouse.x;
+    const camV = liveCamera.seq > 0 ? liveCamera.phi / Math.PI : mouse.y;
+
+    // 1. Detect Motion for TAA (timestamp-based: the old setTimeout-per-
+    // frame allocated a timer 60x/sec while moving and could fire late
+    // under load, smearing the TAA blend window).
+    const nowMotion = performance.now();
+    const dx = Math.abs(camU - this.lastMouse.x);
+    const dy = Math.abs(camV - this.lastMouse.y);
     if (dx > 0.0001 || dy > 0.0001) {
-      this.isCameraMoving = true;
-      if (this.moveTimeout) clearTimeout(this.moveTimeout);
-      this.moveTimeout = setTimeout(() => {
-        this.isCameraMoving = false;
-      }, 300);
+      this.lastMotionTime = nowMotion;
     }
-    this.lastMouse = { ...mouse };
+    this.isCameraMoving = nowMotion - this.lastMotionTime < 300;
+    // Avoid per-frame object spread ({ ...mouse } = 60 allocs/sec).
+    this.lastMouse.x = camU;
+    this.lastMouse.y = camV;
 
     // 2. Physics / LUT Sync
     this.syncLUTs();
 
-    if (!params.paused) this.time += 0.01;
-
-    // --- Dynamic Resolution & Metrics ---
+    // --- Clock / Dynamic Resolution & Metrics ---
     const now = performance.now();
     const deltaTime = now - this.lastFrameTime;
     this.lastFrameTime = now;
 
-    // Filter out huge spikes from tab switching
+    // Filter out huge spikes from tab switching / throttled rAF.
     const cappedDelta = Math.min(deltaTime, 100);
+
+    // Simulation clock advances in TIME, not frames. It used to be
+    // `this.time += 0.01` per rendered frame, so the disk rotation, nebula
+    // drift and star twinkle ran ~2.4x fast on a 144Hz panel and half speed
+    // at 30Hz -- and the value grew without bound. 0.01 per frame at 60Hz
+    // equals 0.6 simulation units per second, which is the calibration this
+    // keeps (identical look at 60fps, now identical *speed* everywhere).
+    if (!params.paused) {
+      this.time += (cappedDelta / 1000) * SIMULATION_UNITS_PER_SECOND;
+    }
+
     const metrics = this.performanceMonitor.updateMetrics(cappedDelta);
 
-    // Throttle UI Updates (5Hz / 200ms)
-    if (now - this.lastMetricsUpdate > 200) {
+    // UNIFIED ADAPTIVE RESOLUTION (single owner).
+    // The PerformanceMonitor PID (stepped inside updateMetrics above) is the
+    // ONLY automatic controller. A previous React-level
+    // AdaptiveResolutionController wrote params.renderScale on its own
+    // cadence and fought this PID, causing double-scaling oscillation.
+    // params.renderScale is now the manual ceiling: the PerformanceTab
+    // slider caps how high the PID may go, and is used directly when
+    // adaptive resolution is off.
+    const userCeiling = Math.min(
+      PERFORMANCE_CONFIG.resolution.maxScale,
+      Math.max(
+        PERFORMANCE_CONFIG.resolution.minScale,
+        params.renderScale,
+      ),
+    );
+    let dynamicRenderScale = userCeiling;
+    if (
+      params.adaptiveResolution &&
+      PERFORMANCE_CONFIG.resolution.enableDynamicScaling
+    ) {
+      const deviceCap = this.isMobileDeviceCached
+        ? PERFORMANCE_CONFIG.resolution.mobileCap
+        : PERFORMANCE_CONFIG.resolution.maxScale;
+      dynamicRenderScale = Math.min(
+        userCeiling,
+        metrics.renderResolution,
+        deviceCap,
+      );
+    }
+    // Feed the effective scale back every frame so PID state stays coherent
+    // (output clamp doubles as anti-windup), the UI reports the true scale,
+    // and re-enabling adaptive resumes bumplessly from the manual value.
+    this.performanceMonitor.setRenderResolution(dynamicRenderScale);
+
+    // Throttle UI Updates (2Hz / 500ms). Each onMetricsUpdate triggers a
+    // full React re-render of the App tree; 5Hz was causing reconciliation
+    // jank on top of GPU work. Telemetry stays live at 2Hz with no
+    // perceptible staleness.
+    // Push a snapshot copy: getMetrics returns the monitor's live internal
+    // object, and storing that reference in React state would let later
+    // frames silently mutate rendered state.
+    if (now - this.lastMetricsUpdate > 500) {
       this.lastMetricsUpdate = now;
       if (this.onMetricsUpdate) {
-        this.onMetricsUpdate(metrics);
+        this.onMetricsUpdate({ ...metrics });
       }
     }
 
-    // Phase 2.3: Virtual Viewport Scaling
-    const dynamicRenderScale = PERFORMANCE_CONFIG.resolution
-      .enableDynamicScaling
-      ? metrics.renderResolution
-      : 1.0;
+    // Software WebGL (CPU rendering) is ~100x slower for compute shaders.
+    // Force maximum performance settings when detected. The override object
+    // is memoized per input reference (it was rebuilt every frame).
+    // DEFAULT_FEATURES supplies every required toggle so the spread
+    // satisfies FeatureToggles even when params.features is partial.
+    let features = params.features || DEFAULT_FEATURES;
+    if (this.isSoftwareWebGL) {
+      if (
+        params.features !== this.lastForcedInput ||
+        !this.forcedFeatures
+      ) {
+        this.lastForcedInput = params.features ?? null;
+        this.forcedFeatures = {
+          ...DEFAULT_FEATURES,
+          ...params.features,
+          rayTracingQuality: "off" as const,
+          bloom: false,
+          photonSphereGlow: false,
+          relativisticJets: false,
+          gravitationalRedshift: false,
+          kerrShadow: false,
+          backgroundStars: false,
+        };
+      }
+      features = this.forcedFeatures ?? DEFAULT_FEATURES;
+    }
 
     // 3. Render Pass
-    const features = params.features || DEFAULT_FEATURES;
     // Recompile shader if feature toggles changed (cached if same)
     this.recompileShader(features);
     if (!this.program) return; // Recompile may have invalidated program
-    const maxSteps = getMaxRaySteps(features.rayTracingQuality);
+    const maxSteps = this.isSoftwareWebGL
+      ? 16 // Minimal steps for software WebGL
+      : getMaxRaySteps(features.rayTracingQuality, this.isMobileDeviceCached);
+
+    // Anchor the governor ceiling + monitor display to the live quality.
+    // Distinguishes user-driven changes (new ceiling + 15s grace so the
+    // governor doesn't instantly fight an explicit manual selection) from
+    // governor-driven ones (tracked via pendingGovernorQuality).
+    if (this.lastSeenQuality !== features.rayTracingQuality) {
+      const wasGovernorDriven =
+        this.pendingGovernorQuality === features.rayTracingQuality;
+      this.pendingGovernorQuality = null;
+      this.lastSeenQuality = features.rayTracingQuality;
+      this.governorCeiling = features.rayTracingQuality;
+      this.governorUpStreak = 0;
+      if (!wasGovernorDriven) {
+        this.governorGraceUntil = now + 15000;
+      }
+      this.performanceMonitor.setQuality(features.rayTracingQuality);
+    }
+
+    // Runtime quality governor: the missing self-rescue. Resolution scaling
+    // alone cannot save a GPU whose step budget is 4x over its head, and
+    // shouldReduceQuality() was dead code nothing called. This evaluates at
+    // 0.4Hz and steps the RUNG (never "off", never above the ceiling) via
+    // onQualityChange, which the owner applies like a manual selection.
+    this.evaluateQualityGovernor(
+      now,
+      features.rayTracingQuality,
+      metrics,
+      !!params.adaptiveResolution &&
+        PERFORMANCE_CONFIG.resolution.enableDynamicScaling,
+    );
+
+    // Load-shed: while the TAA bypass is engaged (slow GPU), bloom passes
+    // are skipped even if the toggle is on. Rationale: the governor only
+    // steps ray counts, so a weak GPU kept all 6 fullscreen bloom passes
+    // at every rung and barely recovered per step — ratcheting to the floor.
+    // Shedding restores automatically with the bypass latch (hysteretic, so
+    // no popping). The toggle itself is untouched.
+    const bloomEffective = features.bloom && !this.taaBypassed;
 
     // Update Bloom Config
     if (this.bloomManager) {
       this.bloomManager.updateConfig({
-        enabled: features.bloom,
+        enabled: bloomEffective,
         // Intensity/Threshold could come from params too if added to UI
       });
     }
 
-    // Offscreen for Bloom/TAA
-    const forceOffscreen = !!this.reprojectionManager;
+    // Post-processing bypass latch.
+    //
+    // Hysteresis latch: bypass engages below POST_BYPASS_ENGAGE_FPS rolling,
+    // releases above POST_BYPASS_RELEASE_FPS, with 2.5s minimum dwell per
+    // side. A bare threshold flapped the pipeline TAA↔no-TAA whenever fps
+    // straddled it, popping between raw and blended frames — visible flicker.
+    //
+    // The latch only skips TAA/bloom. The scene is still rendered into the
+    // HDR target and tone-mapped on present (see the pipeline section below).
+    const rolling = metrics.rollingAverageFPS;
+    // Auto-Tune OFF = locked settings: release any bypass so the full
+    // pipeline (TAA) always runs and nothing pops on its own.
+    const autoTune =
+      !!params.adaptiveResolution &&
+      PERFORMANCE_CONFIG.resolution.enableDynamicScaling;
+    if (!autoTune) {
+      if (this.taaBypassed) {
+        this.taaBypassed = false;
+        this.lastTaaSwitchMs = now;
+        this.reprojectionManager?.resetHistory();
+      }
+    } else if (
+      !this.taaBypassed &&
+      rolling > 0 &&
+      rolling < POST_BYPASS_ENGAGE_FPS &&
+      now - this.lastTaaSwitchMs > 2500
+    ) {
+      this.taaBypassed = true;
+      this.lastTaaSwitchMs = now;
+      // eslint-disable-next-line no-console
+      console.info(
+        `[auto-tune] TAA bypass ON @rolling ${Math.round(rolling)}fps (no TAA/bloom)`,
+      );
+    } else if (this.taaBypassed && rolling > POST_BYPASS_RELEASE_FPS) {
+      this.taaBypassed = false;
+      this.lastTaaSwitchMs = now;
+      // The history buffer stopped being written while the bypass was on;
+      // reset it so the first re-enabled frame cannot blend a stale image
+      // (ghosting/afterimage pop).
+      this.reprojectionManager?.resetHistory();
+      // eslint-disable-next-line no-console
+      console.info(
+        `[auto-tune] TAA bypass OFF @rolling ${Math.round(rolling)}fps (full pipeline)`,
+      );
+    }
+    // The scene MUST land in the offscreen HDR target: the fragment shader is
+    // compiled with ENABLE_LINEAR_OUTPUT (a post manager always exists), so
+    // it emits linear HDR with no ACES/gamma. Drawing that straight to the
+    // canvas bypasses tone mapping and clips the disk into a saturated red
+    // wash. The bypass latch only skips TAA + bloom, never the tone-map blit.
+    const needsOffscreen = true;
     const targetFB = this.bloomManager
-      ? this.bloomManager.beginScene(forceOffscreen)
+      ? this.bloomManager.beginScene(needsOffscreen)
       : null;
     gl.bindFramebuffer(gl.FRAMEBUFFER, targetFB);
+    const beganOffscreen = targetFB !== null;
 
     gl.viewport(
       0,
@@ -285,10 +633,10 @@ export class WebGLRenderer {
       this.uniformBatcher.set("u_spectrumLUT", 5);
     }
 
-    // Physics Bridge Integration
+    // Physics Bridge Integration (zero-alloc: reuse _shadowCurve)
     let shadowShiftMin = -(params.mass * 2.0) * 2.6; // Fallback
     let shadowShiftMax = params.mass * 2.0 * 2.6;
-    const shadowCurve = new Float32Array(128); // 64 points * 2
+    const shadowCurve = this._shadowCurve;
     let shadowCount = 0;
 
     if (physicsBridge && physicsBridge.isReady()) {
@@ -364,8 +712,9 @@ export class WebGLRenderer {
       "u_frame_dragging_strength",
       PHYSICS_CONSTANTS.gravity.frameDraggingStrength,
     );
-    // Upload mouse (spherical camera coords from useCamera)
-    this.uniformBatcher.set2f("u_mouse", mouse.x, mouse.y);
+    // Upload mouse (spherical camera coords computed at the top of this
+    // frame from the live bus — see note there).
+    this.uniformBatcher.set2f("u_mouse", camU, camV);
     // Disk appearance uniforms
     this.uniformBatcher.set1f(
       "u_disk_density",
@@ -394,50 +743,61 @@ export class WebGLRenderer {
     // 4. Post-processing Pipeline
     // SCIENTIFIC ACCURACY: We must ensure signal processing chains (Bloom, TAA)
     // strictly respect the physical model's feature toggles.
+    //
+    // The scene is ALWAYS written to the offscreen HDR target (see
+    // `beginScene(true)` above). The only legitimately skippable work when the
+    // GPU is struggling is TAA + bloom; the tone-map blit is mandatory.
 
-    if (this.bloomManager && this.reprojectionManager) {
+    if (beganOffscreen && this.bloomManager) {
       const sceneTexture = this.bloomManager.getSceneTexture();
       if (sceneTexture) {
-        // Resolve TAA (Temporal Anti-Aliasing)
-        this.reprojectionManager.resolve(
-          sceneTexture,
-          0.75,
-          this.isCameraMoving,
-          dynamicRenderScale,
-        );
-
-        const resolved = this.reprojectionManager.getResultTexture();
-
-        if (resolved) {
-          // CRITICAL FIX: Explicitly check features.bloom before applying bloom.
-          // Even if bloomManager exists, we must only apply the effect if the
-          // FEATURE TOGGLE is active.
-          if (features.bloom) {
-            this.bloomManager.applyBloomToTexture(resolved, dynamicRenderScale);
-          } else {
-            // If bloom disabled, just draw the TAA-resolved frame to screen
-            this.bloomManager.drawTextureToScreen(resolved, dynamicRenderScale);
-          }
+        if (this.taaBypassed || !this.reprojectionManager) {
+          // Load-shed path: no TAA, no bloom -- but still tone-map + gamma
+          // through the combine shader's identity mode.
+          this.bloomManager.drawTextureToScreen(
+            sceneTexture,
+            dynamicRenderScale,
+          );
         } else {
-          // Fallback if TAA failed (should rarely happen)
-          if (features.bloom) {
-            this.bloomManager.applyBloom(dynamicRenderScale);
+          // Resolve TAA (Temporal Anti-Aliasing)
+          this.reprojectionManager.resolve(
+            sceneTexture,
+            0.75,
+            this.isCameraMoving,
+            dynamicRenderScale,
+          );
+
+          const resolved = this.reprojectionManager.getResultTexture();
+
+          if (resolved) {
+            // CRITICAL FIX: Explicitly check bloomEffective before applying
+            // bloom. Even if bloomManager exists, we must only apply the
+            // effect if the FEATURE TOGGLE is active AND not load-shed.
+            if (bloomEffective) {
+              this.bloomManager.applyBloomToTexture(
+                resolved,
+                dynamicRenderScale,
+              );
+            } else {
+              // If bloom disabled, just draw the TAA-resolved frame to screen
+              this.bloomManager.drawTextureToScreen(
+                resolved,
+                dynamicRenderScale,
+              );
+            }
           } else {
-            this.bloomManager.drawTextureToScreen(
-              sceneTexture,
-              dynamicRenderScale,
-            );
+            // Fallback if TAA failed (should rarely happen)
+            if (bloomEffective) {
+              this.bloomManager.applyBloom(dynamicRenderScale);
+            } else {
+              this.bloomManager.drawTextureToScreen(
+                sceneTexture,
+                dynamicRenderScale,
+              );
+            }
           }
         }
       }
-    } else if (this.bloomManager) {
-      // Non-TAA Path
-      // CRITICAL FIX: Only run bloom pass if explicitly enabled by physics module
-      if (features.bloom) {
-        this.bloomManager.applyBloom(dynamicRenderScale);
-      }
-      // If bloom is disabled and TAA is missing, we already rendered to
-      // the screen backbuffer (targetFB was null), so no action needed.
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, null);

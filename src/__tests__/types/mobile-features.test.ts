@@ -6,7 +6,7 @@
 
 import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
-import { getMobilePreset, getPreset } from "@/types/features";
+import { getMobilePreset, getPreset } from "@/config/feature-flags";
 
 describe("Mobile Feature Optimization", () => {
   /**

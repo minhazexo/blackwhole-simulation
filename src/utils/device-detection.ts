@@ -61,6 +61,21 @@ export function isMobileDevice(): boolean {
 }
 
 /**
+ * Detects if the current UA belongs to an in-app browser
+ * (Instagram, Facebook, LinkedIn, Threads, Messenger, Line, Twitter, WeChat).
+ *
+ * @param ua - User-agent string to test (defaults to navigator.userAgent)
+ * @returns true if an in-app browser signature is present
+ */
+export function isInAppBrowser(ua?: string): boolean {
+  const target =
+    ua ?? (typeof navigator !== "undefined" ? navigator.userAgent : "");
+  return /Instagram|FBAN|FBAV|LinkedIn|Threads|Messenger|Line|Twitter|MicroMessenger/i.test(
+    target,
+  );
+}
+
+/**
  * Detects if the current device has an integrated GPU
  *
  * Uses WebGL debug renderer info to identify integrated graphics
@@ -93,6 +108,56 @@ export function hasIntegratedGPU(gl?: WebGL2RenderingContext | null): boolean {
   }
 
   return false;
+}
+
+/**
+ * Detects if WebGL is running in software mode (CPU rendering)
+ *
+ * Software WebGL (llvmpipe, SwiftShader, ANGLE on CPU) is extremely slow
+ * for compute-heavy shaders like ray marching. We detect it by checking
+ * the renderer string for known software renderer signatures.
+ *
+ * @param gl - WebGL rendering context
+ * @returns true if software WebGL, false otherwise
+ */
+export function isSoftwareWebGL(gl: WebGL2RenderingContext | null): boolean {
+  if (!gl) return false;
+  try {
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    if (!debugInfo) return false;
+    const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+    if (typeof renderer !== "string") return false;
+    const r = renderer.toLowerCase();
+    // Software renderer signatures
+    return (
+      r.includes("llvmpipe") ||
+      r.includes("swiftshader") ||
+      r.includes("angle on cpu") ||
+      r.includes("software") ||
+      r.includes("mesa") ||
+      r.includes("software rasterizer")
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Gets the WebGL renderer string for diagnostic purposes
+ *
+ * @param gl - WebGL rendering context
+ * @returns Renderer string or empty string
+ */
+export function getWebGLRenderer(gl: WebGL2RenderingContext | null): string {
+  if (!gl) return "";
+  try {
+    const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
+    if (!debugInfo) return "";
+    const renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+    return typeof renderer === "string" ? renderer : "";
+  } catch {
+    return "";
+  }
 }
 
 /**
@@ -171,18 +236,13 @@ export function buildDeviceProfile(
     maxTextureSize: gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 0,
     deviceMemoryGB:
       typeof navigator !== "undefined" && "deviceMemory" in navigator
-        ? (navigator as any).deviceMemory
+        ? (navigator as { deviceMemory?: number }).deviceMemory ?? 0
         : 0,
     hardwareConcurrency:
       typeof navigator !== "undefined" && navigator.hardwareConcurrency
         ? navigator.hardwareConcurrency
         : 0,
-    isInApp:
-      typeof navigator !== "undefined"
-        ? /Instagram|FBAN|FBAV|LinkedIn|Threads|Messenger|Line|Twitter|MicroMessenger/i.test(
-            navigator.userAgent,
-          )
-        : false,
+    isInApp: isInAppBrowser(),
     gl,
   };
 }
@@ -202,23 +262,4 @@ export function getHardwareInfo(
     devicePixelRatio:
       typeof window !== "undefined" ? window.devicePixelRatio : 1,
   };
-}
-
-/**
- * Gets the maximum ray steps for mobile devices
- *
- * Requirements: 16.3 - Mobile devices capped at 100 ray steps
- *
- * @param requestedSteps - The requested number of ray steps
- * @param isMobile - Whether the device is mobile
- * @returns The capped ray steps (100 max for mobile)
- */
-export function getMobileRayStepCap(
-  requestedSteps: number,
-  isMobile: boolean,
-): number {
-  if (isMobile) {
-    return Math.min(requestedSteps, 100);
-  }
-  return requestedSteps;
 }

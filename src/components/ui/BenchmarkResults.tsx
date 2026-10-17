@@ -1,4 +1,5 @@
 import { motion } from "framer-motion";
+import { memo } from "react";
 import { Zap, Check, Activity, X } from "lucide-react";
 import type { BenchmarkReport } from "@/performance/benchmark";
 
@@ -34,11 +35,12 @@ const getTierInfo = (fps: number) => {
   };
 };
 
-export const BenchmarkResults = ({
+// Memoized (only mounted with results open).
+export const BenchmarkResults = memo(function BenchmarkResults({
   report,
   onClose,
   onApplyRecommended,
-}: BenchmarkResultsProps) => {
+}: BenchmarkResultsProps) {
   const recommendedResult = report.results.find(
     (r) => r.presetName === report.recommendedPreset,
   );
@@ -161,4 +163,4 @@ export const BenchmarkResults = ({
       </motion.div>
     </div>
   );
-};
+});

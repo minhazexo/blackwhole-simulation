@@ -155,32 +155,6 @@ export function createQuadBuffer(
   return getSharedQuadBuffer(gl);
 }
 
-/**
- * Sets up vertex attribute pointer for a position attribute.
- * This configures how WebGL should read vertex data from the buffer.
- *
- * @param gl - The WebGL rendering context
- * @param program - The WebGL program containing the attribute
- * @param attributeName - The name of the attribute in the shader (e.g., 'position')
- *
- * @example
- * setupPositionAttribute(gl, program, 'position');
- */
-export function setupPositionAttribute(
-  gl: WebGL2RenderingContext,
-  program: WebGLProgram,
-  attributeName: string,
-  buffer: WebGLBuffer | null,
-): void {
-  if (!buffer) return;
-  gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
-  const positionLocation = gl.getAttribLocation(program, attributeName);
-  if (positionLocation !== -1) {
-    gl.enableVertexAttribArray(positionLocation);
-    gl.vertexAttribPointer(positionLocation, 2, gl.FLOAT, false, 0, 0);
-  }
-}
-
 interface TextureOptions {
   width: number;
   height: number;
@@ -299,32 +273,4 @@ export function createBlueNoiseTexture(
     magFilter: gl.NEAREST, // Important for dithering lookup
     wrap: gl.REPEAT,
   });
-}
-/**
- * Performs a minimal 1x1 render pass to "warm up" the shader and driver.
- * Prevents stutters when new execution paths (branches) are first taken.
- */
-export function warmupShader(
-  gl: WebGL2RenderingContext,
-  program: WebGLProgram,
-  quadBuffer: WebGLBuffer,
-): void {
-  const originalViewport = gl.getParameter(gl.VIEWPORT);
-
-  gl.useProgram(program);
-  gl.viewport(0, 0, 1, 1);
-
-  // Setup minimal attributes
-  setupPositionAttribute(gl, program, "position", quadBuffer);
-
-  // Draw - this triggers driver compilation/optimization
-  gl.drawArrays(gl.TRIANGLES, 0, 6);
-
-  // Restore viewport
-  gl.viewport(
-    originalViewport[0],
-    originalViewport[1],
-    originalViewport[2],
-    originalViewport[3],
-  );
 }

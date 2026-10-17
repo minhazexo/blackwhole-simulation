@@ -99,7 +99,7 @@ The project is organized into strictly defined modules to separate concerns betw
 src/
 ├── app/                                  # Next.js App Router (Entry Points)
 ├── components/                           # UI & Rendering Components
-├── configs/                              # Static Configuration
+├── config/                                # Static Configuration
 ├── engine/                               # WASM Integration
 ├── hooks/                                # Logic & State Management
 ├── rendering/                            # Rendering Orchestration

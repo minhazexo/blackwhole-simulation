@@ -1,153 +1,43 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from "react";
-import { clampAndValidate, isValidNumber } from "@/utils/validation";
+import { clampAndValidate } from "@/utils/validation";
 import type { MouseState, SimulationParams } from "@/types/simulation";
-import { SCHWARZSCHILD_RADIUS_SOLAR } from "@/physics/constants";
-import { SIMULATION_CONFIG } from "@/configs/simulation.config";
-import { VIEWPOINTS, getViewpoint } from "@/configs/viewpoints";
+import { physicsBridge } from "@/engine/physics-bridge";
+import { pushLiveCamera } from "@/engine/camera-live";
+import {
+  DEFAULT_AUTO_SPIN,
+  MAX_ZOOM,
+  MIN_ZOOM,
+  createInitialCameraState,
+  createInitialCinematicState,
+} from "./camera/types";
+import type {
+  CameraRig,
+  CameraState,
+  CinematicState,
+  TouchState,
+} from "./camera/types";
+import { useCameraInput } from "./camera/useCameraInput";
+import { useCameraTour } from "./camera/useCameraTour";
 // Geometric Units: G = c = 1
 
-/**
- * Camera state with spherical coordinates and velocity for momentum
- */
-export interface CameraState {
-  /** Azimuthal angle (0 - 2π) */
-  theta: number;
-  /** Polar angle (0 - π) */
-  phi: number;
-  /** Velocity for theta (momentum) */
-  thetaVelocity: number;
-  /** Velocity for phi (momentum) */
-  phiVelocity: number;
-  /** Velocity for zoom (momentum) */
-  zoomVelocity: number;
-  /** Damping factor for momentum decay */
-  damping: number;
-}
-
-/**
- * Extended Cinematic State Machine
- * Tracks the active "Director Mode" and its trajectory parameters.
- */
-interface CinematicState {
-  active: boolean;
-  mode: "orbit" | "dive" | "viewpoint" | "viewpoints-tour" | null;
-  startTime: number;
-  lastTime: number; // For physics integration (dt)
-  startParams: {
-    theta: number;
-    phi: number;
-    zoom: number;
-  };
-  // Physics State for Infall
-  velocity: number; // Radial velocity (dr/dt) in Rs/s
-  angularMomentum: number; // Conserved L = r^2 * omega
-  // Recovery phase: smooth interpolation back to origin after cinematic ends
-  recovering: boolean;
-  recoverStartTime: number;
-  // --- Viewpoint flight state ---
-  viewpointId?: string;
-  /** Flying = interpolating to target; Dwelling = at target with characteristic animation */
-  viewpointPhase?: "flying" | "dwelling";
-  viewpointStartParams?: { theta: number; phi: number; zoom: number };
-  viewpointTargetParams?: { theta: number; phi: number; zoom: number };
-  viewpointPhaseStartTime?: number;
-  viewpointAnimType?: "orbit" | "drift" | "still";
-  viewpointAnimSpeed?: number;
-  // --- Viewpoints Tour state ---
-  /** Ordered list of viewpoint IDs for the auto-tour */
-  tourViewpointIds?: string[];
-  /** Current index into tourViewpointIds */
-  tourIndex?: number;
-  /** Total number of viewpoints in this tour */
-  tourTotal?: number;
-  /** Duration (seconds) each viewpoint dwells before advancing */
-  tourDwellDuration?: number;
-}
-
-/**
- * Viewport dimensions for camera calculations
- */
-export interface ViewportDimensions {
-  width: number;
-  height: number;
-  aspectRatio: number;
-}
-
-// Constants for camera positioning
-const DEFAULT_ZOOM = SIMULATION_CONFIG.zoom.default;
-const MIN_ZOOM = 0.5;
-const MAX_ZOOM = 500.0;
-const FOV_DEGREES = 45;
-const TARGET_VIEWPORT_COVERAGE = 0.7; // 70% of viewport (60-80% range)
-const ACCRETION_DISK_OUTER_RADIUS_MULTIPLIER = 12.0; // Outer disk is ~12x event horizon
-// Default auto-spin if not provided
-const DEFAULT_AUTO_SPIN = SIMULATION_CONFIG.autoSpin.default;
-const DEFAULT_VERTICAL_ANGLE =
-  (SIMULATION_CONFIG.verticalAngle.default * Math.PI) / 180;
-
-/**
- * Calculate optimal initial zoom distance based on black hole mass and viewport dimensions
- */
-export function calculateInitialZoom(
-  mass: number,
-  viewportWidth: number,
-  viewportHeight: number,
-): number {
-  if (!isValidNumber(mass) || mass <= 0) return DEFAULT_ZOOM;
-
-  if (
-    !isValidNumber(viewportWidth) ||
-    !isValidNumber(viewportHeight) ||
-    viewportWidth <= 0 ||
-    viewportHeight <= 0
-  ) {
-    return DEFAULT_ZOOM;
-  }
-
-  try {
-    const aspectRatio = viewportWidth / viewportHeight;
-    const eventHorizonRadius = mass * SCHWARZSCHILD_RADIUS_SOLAR;
-    const diskOuterRadius =
-      eventHorizonRadius * ACCRETION_DISK_OUTER_RADIUS_MULTIPLIER;
-    const fovRadians = (FOV_DEGREES * Math.PI) / 180;
-    const halfFov = fovRadians / 2;
-    const tanHalfFov = Math.tan(halfFov);
-
-    if (tanHalfFov <= 0) return DEFAULT_ZOOM;
-
-    const baseDistance = diskOuterRadius / tanHalfFov;
-    const adjustedDistance = baseDistance / TARGET_VIEWPORT_COVERAGE;
-    let aspectRatioAdjustment = 1.0;
-    if (aspectRatio < 1.0) {
-      aspectRatioAdjustment = 1.0 / aspectRatio;
-    }
-
-    const finalDistance = adjustedDistance * aspectRatioAdjustment;
-    const normalizedZoom = (finalDistance / diskOuterRadius) * (mass * 3.5);
-
-    return clampAndValidate(normalizedZoom, MIN_ZOOM, MAX_ZOOM, DEFAULT_ZOOM);
-  } catch (error) {
-    // eslint-disable-next-line no-console
-    console.warn("Error calculating initial zoom:", error);
-    return DEFAULT_ZOOM;
-  }
-}
-
-/**
- * Touch gesture state for multi-touch handling
- */
-export interface TouchState {
-  touches: React.Touch[];
-  initialDistance: number;
-  initialAngle: number;
-  initialCenter: { x: number; y: number };
-}
-
-import { physicsBridge } from "@/engine/physics-bridge";
+// Preserve the historical export API of this module. Canonical definitions
+// live in ./camera/*; the math helper is re-exported so existing imports
+// (e.g. `@/hooks/useCamera`) keep working.
+export type {
+  CameraState,
+  CinematicState,
+  TouchState,
+  ViewportDimensions,
+} from "./camera/types";
+export { calculateInitialZoom } from "./camera/cinematic-sequences";
 
 /**
  * Custom hook for enhanced camera control interactions
  * Now featuring "Cinematic Engineering" Grade Orbit & Infall
+ *
+ * Thin composer: creates the shared rig refs, runs the animation loop
+ * (dispatching to the pure sequence fns and the tour steppers), wires the
+ * input + tour sub-hooks, and returns the exact historical object shape.
  */
 export function useCamera(
   params: SimulationParams,
@@ -159,34 +49,14 @@ export function useCamera(
   }, [params.autoSpin]);
 
   // --- Source of Truth: Physics Ref ---
-  const physicsRef = useRef<CameraState>({
-    theta: Math.PI,
-    phi: DEFAULT_VERTICAL_ANGLE,
-    thetaVelocity: 0,
-    phiVelocity: 0,
-    zoomVelocity: 0,
-    damping: 0.92,
-  });
+  const physicsRef = useRef<CameraState>(createInitialCameraState());
 
-  // React state for rendering synchronization (throttled)
-  const [cameraState, setCameraState] = useState<CameraState>(
-    physicsRef.current,
+  // React state for rendering synchronization (throttled).
+  // Seeded from a fresh factory object (same values as physicsRef's
+  // initial state). All updates clone, so identity is never shared.
+  const [cameraState, setCameraState] = useState<CameraState>(() =>
+    createInitialCameraState(),
   );
-
-  // Cinematic State (UI Sync)
-  const [isCinematic, setIsCinematic] = useState(false);
-  const [cinematicMode, setCinematicMode] = useState<
-    "orbit" | "dive" | "viewpoint" | "viewpoints-tour" | null
-  >(null);
-  const [currentViewpointId, setCurrentViewpointId] = useState<
-    string | null
-  >(null);
-  const currentViewpointDef = currentViewpointId
-    ? getViewpoint(currentViewpointId)
-    : null;
-  // Tour progress state
-  const [tourIndex, setTourIndex] = useState(0);
-  const [tourTotal, setTourTotal] = useState(0);
 
   const mouse = useMemo<MouseState>(() => {
     // Normalize derived state from the REACT state (for rendering UI/Uniforms)
@@ -204,554 +74,159 @@ export function useCamera(
     initialCenter: { x: 0, y: 0 },
   });
 
+  // Last camera pose pushed to React (theta/phi + timestamp). The loop
+  // syncs through this gate so idle auto-spin doesn't re-render the whole
+  // App tree 30x/sec. Shared with input handlers via the rig for dedupe.
+  // Declared with the other refs (above the rig memo) to avoid TDZ.
+  const lastSynced = useRef({ theta: 0, phi: 0, time: 0 });
+
   // --- Cinematic State Machine (Physics Side) ---
-  const cinematicRef = useRef<CinematicState>({
-    active: false,
-    mode: null,
-    startTime: 0,
-    lastTime: 0,
-    startParams: { theta: 0, phi: 0, zoom: 0 },
-    velocity: 0,
-    angularMomentum: 0,
-    recovering: false,
-    recoverStartTime: 0,
-    viewpointId: undefined,
-    viewpointPhase: undefined,
-    viewpointStartParams: undefined,
-    viewpointTargetParams: undefined,
-    viewpointPhaseStartTime: undefined,
-    viewpointAnimType: undefined,
-    viewpointAnimSpeed: undefined,
-    tourViewpointIds: undefined,
-    tourIndex: undefined,
-    tourTotal: undefined,
-    tourDwellDuration: undefined,
-  });
+  const cinematicRef = useRef<CinematicState>(createInitialCinematicState());
 
   const paramsRef = useRef(params);
   useEffect(() => {
     paramsRef.current = params;
   }, [params]);
 
+  // Single shared rig passed down to the sub-hooks (no duplicated ref state).
+  const rig = useMemo<CameraRig>(
+    () => ({
+      physicsRef,
+      cinematicRef,
+      isDragging,
+      lastMousePos,
+      touchState,
+      paramsRef,
+      lastSynced,
+    }),
+    [],
+  );
+
+  // Coalesced zoom writer for per-frame cinematic steppers (fly-to, dwell
+  // breathing, dive, orbit). The steppers run every rAF; pushing each zoom
+  // straight to setParams re-rendered the full App 60x/sec during
+  // cinematics. Queued fns flush at most once per frame, in order, with a
+  // no-op guard so identical values skip React entirely. One-shot updates
+  // (start/stop/reset) keep using setParams directly.
+  const pendingZoomFns = useRef<Array<(z: number) => number>>([]);
+  const zoomFlushQueued = useRef(false);
+  const queueZoomSync = useCallback(
+    (fn: (z: number) => number) => {
+      pendingZoomFns.current.push(fn);
+      if (zoomFlushQueued.current) return;
+      zoomFlushQueued.current = true;
+      requestAnimationFrame(() => {
+        zoomFlushQueued.current = false;
+        const fns = pendingZoomFns.current;
+        pendingZoomFns.current = [];
+        if (fns.length === 0) return;
+        setParams((prev) => {
+          let z = prev.zoom;
+          for (const f of fns) z = f(z);
+          if (Math.abs(z - prev.zoom) < 1e-4) return prev;
+          return {
+            ...prev,
+            zoom: clampAndValidate(z, MIN_ZOOM, MAX_ZOOM, prev.zoom),
+          };
+        });
+      });
+    },
+    [setParams],
+  );
+
+  const tour = useCameraTour(rig, { setParams, setCameraState, queueZoomSync });
+  const input = useCameraInput(rig, {
+    setParams,
+    setCameraState,
+    stopCinematic: tour.stopCinematic,
+  });
+
   // --- Physics Animation Loop ---
   useEffect(() => {
     let animationFrameId: number;
     let frameCount = 0;
-    const SYNC_INTERVAL = 2; // Sync to React every 2 frames for smoother UI (60fps -> 30fps UI)
-
-    // --- Reset Logic (Internal for loop) ---
-    // The main resetCamera is defined outside the effect.
+    // Cinematic/recovery motion is fast → sync every 2 frames (30Hz UI).
+    // Idle/interactive drift is slow → evaluate every 6 frames (10Hz) and
+    // push only on real movement (see gate below).
+    const SYNC_INTERVAL_ACTIVE = 2;
+    const SYNC_INTERVAL_IDLE = 6;
+    // Radians of accumulated camera motion that justifies a React sync.
+    // Auto-spin advances ~0.001 rad/frame, so idle pushes land roughly
+    // every 4-6 frames anyway; the gate's real job is killing the
+    // fully-static 30Hz churn (paused velocities, dwell phases).
+    const SYNC_EPSILON_RAD = 0.004;
+    // Heartbeat so UI/uniforms never go stale while mounted.
+    const SYNC_HEARTBEAT_MS = 500;
 
     const applyMomentum = () => {
-      const state = physicsRef.current; // Direct access to shared state
+      const state = rig.physicsRef.current; // Direct access to shared state
+      const cine = rig.cinematicRef.current;
       const now = performance.now();
 
       // Calculate delta time in seconds (max 0.1s to prevent huge jumps on lag)
-      const dt = Math.min((now - cinematicRef.current.lastTime) * 0.001, 0.1);
-      cinematicRef.current.lastTime = now;
+      const dt = Math.min((now - cine.lastTime) * 0.001, 0.1);
+      cine.lastTime = now;
+      // Normalised 60Hz step count. The camera's momentum/damping constants
+      // (damping = 0.92, autoSpin = rad per 60Hz frame, drag velocities) were
+      // authored per rendered frame; multiplying by this factor keeps the
+      // same feel at 60fps while making the motion refresh-rate independent
+      // (a 144Hz panel used to integrate 2.4x faster than a 60Hz one).
+      const step = dt * 60;
 
       // PAUSE GUARD: Skip all physics when simulation is paused
-      const isPaused = paramsRef.current.paused;
-      if (isPaused) {
+      if (rig.paramsRef.current.paused) {
         // Still schedule next frame so loop doesn't die
         animationFrameId = requestAnimationFrame(applyMomentum);
         return;
       }
 
-      // --- RECOVERY PHASE: Smooth emergence back to pre-cinematic position ---
-      // Like waking from a dream -- initially fast pullback, then gentle settling.
-      if (cinematicRef.current.recovering) {
-        const RECOVER_DURATION = 3.5; // seconds (longer = more dramatic)
-        const elapsed = (now - cinematicRef.current.recoverStartTime) * 0.001;
-        const progress = Math.min(elapsed / RECOVER_DURATION, 1.0);
-
-        // Quartic ease-out: stronger initial pull, very gentle deceleration
-        const ease = 1.0 - Math.pow(1.0 - progress, 4);
-
-        const target = cinematicRef.current.startParams;
-
-        // Accelerating convergence rate
-        const lerpRate = 0.05 + ease * 0.06;
-        state.theta += (target.theta - state.theta) * lerpRate;
-        state.phi += (target.phi - state.phi) * lerpRate;
-
-        // Interpolate zoom
-        const currentZoom = paramsRef.current.zoom;
-        const zoomDelta = (target.zoom - currentZoom) * lerpRate;
-        if (Math.abs(zoomDelta) > 0.001) {
-          setParams((prev) => ({ ...prev, zoom: prev.zoom + zoomDelta }));
-        }
-
-        // Check if recovery is complete
-        const thetaDist = Math.abs(target.theta - state.theta);
-        const phiDist = Math.abs(target.phi - state.phi);
-        const zoomDist = Math.abs(target.zoom - paramsRef.current.zoom);
-
-        if (
-          (thetaDist < 0.01 && phiDist < 0.01 && zoomDist < 0.1) ||
-          progress >= 1.0
-        ) {
-          state.theta = target.theta;
-          state.phi = target.phi;
-          cinematicRef.current.recovering = false;
-          setParams((prev) => ({
-            ...prev,
-            zoom: target.zoom,
-            autoSpin: DEFAULT_AUTO_SPIN,
-          }));
-        }
-
-        state.phi = Math.max(0.001, Math.min(Math.PI - 0.001, state.phi));
-      } else if (cinematicRef.current.active && cinematicRef.current.mode) {
+      if (cine.recovering) {
+        // --- RECOVERY PHASE: Smooth emergence back to pre-cinematic position ---
+        tour.stepRecovery(now);
+      } else if (cine.active && cine.mode) {
         // --- CINEMATIC MODE: DIRECTOR'S CUT ---
-        const t = (now - cinematicRef.current.startTime) * 0.001;
+        const t = (now - cine.startTime) * 0.001;
 
-        if (
-          cinematicRef.current.mode === "viewpoint" ||
-          cinematicRef.current.mode === "viewpoints-tour"
-        ) {
-          // ============================================================
-          //  VIEWPOINT: FLY-TO-AND-DWELL
-          //  Phase 1 — Fly: smooth 4s interpolation to target position
-          //  Phase 2 — Dwell: characteristic animation (orbit/drift/still)
-          // ============================================================
-          const vp = cinematicRef.current;
-
-          if (vp.viewpointPhase === "flying") {
-            const FLY_DURATION = 4.0;
-            const elapsed =
-              (now - (vp.viewpointPhaseStartTime ?? now)) * 0.001;
-            const progress = Math.min(elapsed / FLY_DURATION, 1.0);
-
-            // Quartic ease-in-out: smooth acceleration then deceleration
-            const ease =
-              progress < 0.5
-                ? 8 * progress * progress * progress * progress
-                : 1 -
-                  Math.pow(-2 * progress + 2, 4) / 2;
-
-            const start = vp.viewpointStartParams!;
-            const target = vp.viewpointTargetParams!;
-
-            // Theta: shortest angular path
-            let thetaDiff =
-              ((target.theta - start.theta + Math.PI) % (2 * Math.PI)) -
-              Math.PI;
-            if (thetaDiff < -Math.PI) thetaDiff += 2 * Math.PI;
-            state.theta = start.theta + thetaDiff * ease;
-
-            // Phi: direct linear interpolation (no wrapping needed)
-            state.phi =
-              start.phi + (target.phi - start.phi) * ease;
-
-            // Zoom: exponential-like interpolation for natural feel
-            const zoomRatio = target.zoom / Math.max(start.zoom, 0.01);
-            const currentZoom =
-              start.zoom * Math.pow(zoomRatio, ease);
-
-            // Apply zoom smoothly
-            if (
-              Math.abs(currentZoom - paramsRef.current.zoom) > 0.001
-            ) {
-              setParams((prev) => ({
-                ...prev,
-                zoom: clampAndValidate(
-                  currentZoom,
-                  MIN_ZOOM,
-                  MAX_ZOOM,
-                  prev.zoom,
-                ),
-              }));
-            }
-
-            // Clamp phi
-            state.phi = Math.max(
-              0.001,
-              Math.min(Math.PI - 0.001, state.phi),
-            );
-
-            // Transition to dwell phase
-            if (progress >= 1.0) {
-              vp.viewpointPhase = "dwelling";
-              vp.viewpointPhaseStartTime = now;
-            }
-          } else if (vp.viewpointPhase === "dwelling") {
-            // Dwell: apply the viewpoint's characteristic animation
-            const dwellT =
-              (now - (vp.viewpointPhaseStartTime ?? now)) * 0.001;
-
-            if (vp.viewpointAnimType === "orbit") {
-              // Slow, majestic orbit
-              const speed = vp.viewpointAnimSpeed ?? 0.1;
-              state.theta += dt * speed;
-
-              // Subtle breathing oscillation
-              const breathe = Math.sin(dwellT * 0.5) * 0.1;
-              setParams((prev) => {
-                const targetZoom = prev.zoom + breathe * 0.008;
-                return {
-                  ...prev,
-                  zoom: clampAndValidate(
-                    targetZoom,
-                    MIN_ZOOM,
-                    MAX_ZOOM,
-                    prev.zoom,
-                  ),
-                };
-              });
-
-              // Micro-wobble for organic feel (like the orbit tour)
-              state.theta +=
-                Math.sin(dwellT * 0.31) * 0.003 +
-                Math.cos(dwellT * 0.17) * 0.002;
-              state.phi +=
-                Math.cos(dwellT * 0.23) * 0.002 +
-                Math.sin(dwellT * 0.41) * 0.001;
-            } else if (vp.viewpointAnimType === "drift") {
-              // Gentle, meditative drift
-              state.theta += Math.sin(dwellT * 0.2) * 0.004;
-              state.phi += Math.cos(dwellT * 0.15) * 0.003;
-
-              // Very subtle zoom pulse
-              const pulse = Math.sin(dwellT * 0.3) * 0.002;
-              setParams((prev) => ({
-                ...prev,
-                zoom: clampAndValidate(
-                  prev.zoom + pulse,
-                  MIN_ZOOM,
-                  MAX_ZOOM,
-                  prev.zoom,
-                ),
-              }));
-            }
-            // type === "still": no camera animation, perfectly static
-
-            // ── Viewpoints Tour: advance to next viewpoint after dwell ──
-            if (
-              cinematicRef.current.mode === "viewpoints-tour" &&
-              vp.viewpointPhase === "dwelling" &&
-              vp.tourViewpointIds !== undefined &&
-              vp.tourIndex !== undefined &&
-              vp.tourTotal !== undefined
-            ) {
-              const vpDwellDuration = vp.tourDwellDuration ?? 10.0;
-              const dwellElapsed =
-                (now - (vp.viewpointPhaseStartTime ?? now)) * 0.001;
-
-              if (dwellElapsed >= vpDwellDuration) {
-                // Advance to next viewpoint
-                const nextIndex = vp.tourIndex + 1;
-
-                if (nextIndex >= vp.tourTotal) {
-                  // Tour complete → recover to start
-                  cinematicRef.current.active = false;
-                  cinematicRef.current.mode = null;
-                  cinematicRef.current.recovering = true;
-                  cinematicRef.current.recoverStartTime = now;
-                  setIsCinematic(false);
-                  setCinematicMode(null);
-                  setCurrentViewpointId(null);
-                } else {
-                  // Transition to next viewpoint
-                  const nextVpId = vp.tourViewpointIds[nextIndex];
-                  if (nextVpId) {
-                    const nextVpDef = getViewpoint(nextVpId);
-                    if (nextVpDef) {
-                      vp.tourIndex = nextIndex;
-                      setTourIndex(nextIndex);
-                      vp.viewpointId = nextVpDef.id;
-                      setCurrentViewpointId(nextVpDef.id);
-                      vp.viewpointPhase = "flying";
-                      vp.viewpointPhaseStartTime = now;
-                      vp.viewpointStartParams = {
-                        theta: state.theta,
-                        phi: state.phi,
-                        zoom: paramsRef.current.zoom,
-                      };
-                      vp.viewpointTargetParams = {
-                        theta: nextVpDef.camera.theta,
-                        phi: nextVpDef.camera.phi,
-                        zoom: nextVpDef.camera.zoom,
-                      };
-                      vp.viewpointAnimType = nextVpDef.animation.type;
-                      vp.viewpointAnimSpeed =
-                        nextVpDef.animation.speed ?? 0.1;
-                    }
-                  }
-                }
-              }
-            }
-
-            state.phi = Math.max(
-              0.001,
-              Math.min(Math.PI - 0.001, state.phi),
-            );
-          }
-        } else if (cinematicRef.current.mode === "orbit") {
-          // ============================================================
-          //  ORBIT TOUR: "THE GRAND SURVEY"
-          //  4-Act cinematic orbit with Keplerian speed variation,
-          //  dramatic vertical sweeps, and zoom breathing.
-          // ============================================================
-          const ORBIT_MAX_DURATION = 120.0;
-          if (t > ORBIT_MAX_DURATION) {
-            cinematicRef.current.active = false;
-            cinematicRef.current.mode = null;
-            cinematicRef.current.recovering = true;
-            cinematicRef.current.recoverStartTime = now;
-            setIsCinematic(false);
-            setCinematicMode(null);
-          } else {
-            // --- Act boundaries ---
-            const ACT1_END = 15.0; // The Reveal
-            const ACT2_END = 45.0; // The Descent & Sweep
-            const ACT3_END = 75.0; // The Close Pass
-            // ACT4: 75 - 120       // The Contemplation
-
-            // --- Smooth blending function ---
-            // Hermite smoothstep for act transitions (no pops or sudden changes)
-            const smoothstep = (edge0: number, edge1: number, x: number) => {
-              const v = Math.max(0, Math.min(1, (x - edge0) / (edge1 - edge0)));
-              return v * v * (3 - 2 * v);
-            };
-
-            // --- Target Distance (Zoom) ---
-            // Each act has a characteristic distance. We crossfade between them.
-            let targetDist: number;
-            let targetPhi: number;
-            let orbitSpeed: number;
-
-            const mass = paramsRef.current.mass;
-            const minSafe = Math.max(15.0, mass * 3.5);
-
-            if (t < ACT1_END) {
-              // ACT 1: THE REVEAL -- Pull back to wide establishing shot
-              // Camera rises above the disk (low phi = looking down)
-              const actProgress = t / ACT1_END;
-              const easeIn = smoothstep(0, 1, actProgress);
-
-              // Zoom out from current to a commanding wide shot
-              targetDist = minSafe + 18.0 + easeIn * 8.0; // ~33 -> 41 Rs
-              // Rise above the disk: from default angle toward ~70 deg (more overhead)
-              const overheadAngle = (70 * Math.PI) / 180;
-              targetPhi =
-                DEFAULT_VERTICAL_ANGLE +
-                (overheadAngle - DEFAULT_VERTICAL_ANGLE) * easeIn;
-              // Slow, majestic rotation
-              orbitSpeed = 0.15 + easeIn * 0.1; // 0.15 -> 0.25 rad/s
-            } else if (t < ACT2_END) {
-              // ACT 2: THE DESCENT & SWEEP -- Drop back to disk level, speed up
-              const actProgress = (t - ACT1_END) / (ACT2_END - ACT1_END);
-              const ease = smoothstep(0, 1, actProgress);
-
-              // Come closer and back to disk plane
-              targetDist = minSafe + 18.0 - ease * 10.0; // 41 -> 23 Rs
-              // Descend back toward equatorial view
-              const overheadAngle = (70 * Math.PI) / 180;
-              targetPhi =
-                overheadAngle + (DEFAULT_VERTICAL_ANGLE - overheadAngle) * ease;
-              // Speed up as we get closer (Kepler's 2nd law feel)
-              orbitSpeed = 0.25 + ease * 0.3; // 0.25 -> 0.55 rad/s
-            } else if (t < ACT3_END) {
-              // ACT 3: THE CLOSE PASS -- Skim near the photon sphere
-              const actProgress = (t - ACT2_END) / (ACT3_END - ACT2_END);
-
-              // Elliptical path: close periapsis at center of act, wider at edges
-              // Use a smooth pulse that dips close then pulls back
-              const periapsisPhase = Math.sin(actProgress * Math.PI); // 0->1->0
-              targetDist = minSafe + 8.0 - periapsisPhase * 6.0; // 23 -> 17 -> 23
-              // Slight dip below equatorial for drama, then back
-              const equatorialTilt = (3 * Math.PI) / 180;
-              targetPhi =
-                DEFAULT_VERTICAL_ANGLE -
-                equatorialTilt * Math.sin(actProgress * Math.PI * 2);
-              // Fastest at periapsis (whip effect)
-              orbitSpeed = 0.55 + periapsisPhase * 0.35; // 0.55 -> 0.90 -> 0.55
-            } else {
-              // ACT 4: THE CONTEMPLATION -- Wide, reverent, slow
-              const actProgress =
-                (t - ACT3_END) / (ORBIT_MAX_DURATION - ACT3_END);
-              const ease = smoothstep(0, 1, actProgress);
-
-              // Pull way back for the "big picture" moment
-              targetDist = minSafe + 10.0 + ease * 18.0; // 25 -> 43 Rs
-              // Gentle rise for a slightly elevated perspective
-              const contemplativeAngle = (85 * Math.PI) / 180;
-              targetPhi =
-                DEFAULT_VERTICAL_ANGLE +
-                (contemplativeAngle - DEFAULT_VERTICAL_ANGLE) * ease * 0.5;
-              // Decelerate to a meditative pace
-              orbitSpeed = 0.55 - ease * 0.35; // 0.55 -> 0.20 rad/s
-            }
-
-            // --- Apply with smooth interpolation (no pops) ---
-            const currentZoom = paramsRef.current.zoom;
-            const zoomLerp = currentZoom + (targetDist - currentZoom) * 0.025;
-            if (Math.abs(zoomLerp - currentZoom) > 0.001) {
-              setParams((prev) => ({ ...prev, zoom: zoomLerp }));
-            }
-
-            // Subtle "breathing" -- micro zoom oscillation for organic feel
-            const breathe = Math.sin(t * 0.7) * 0.3;
-
-            // "Handheld" micro-wobble (2-axis) for realism
-            const wobbleX =
-              Math.sin(t * 0.31) * 0.008 + Math.cos(t * 0.17) * 0.005;
-            const wobbleY =
-              Math.cos(t * 0.23) * 0.006 + Math.sin(t * 0.41) * 0.004;
-
-            if (
-              !isDragging.current &&
-              touchState.current.touches.length === 0
-            ) {
-              // Smooth phi tracking with wobble
-              state.phi += (targetPhi + wobbleY - state.phi) * 0.018;
-              // Orbit rotation with Keplerian speed variation
-              state.theta += dt * orbitSpeed + wobbleX;
-            }
-
-            // Apply breathing to zoom
-            if (Math.abs(breathe) > 0.01) {
-              setParams((prev) => ({
-                ...prev,
-                zoom: Math.max(minSafe, prev.zoom + breathe * 0.01),
-              }));
-            }
-          }
-        } else if (cinematicRef.current.mode === "dive") {
-          // ============================================================
-          //  INFALL DIVE: "THE DESCENT INTO GARGANTUA"
-          //  3-Act geodesic plunge with dramatic pacing.
-          //  Act 1: The Hesitation (0-8s) -- Deep breath before the fall
-          //  Act 2: The Commitment (8-20s) -- Point of no return
-          //  Act 3: The Maelstrom (20s+) -- Physics takes over
-          // ============================================================
-          const r = paramsRef.current.zoom;
-
-          // --- Act-dependent gravity ---
-          // Each act has escalating gravitational intensity.
-          // This creates the "Nolan pacing" -- deliberate, then overwhelming.
-          const ACT1_END = 8.0;
-          const ACT2_END = 20.0;
-
-          let gravityScale: number;
-          let phiDriftRate: number; // How fast camera aligns to equatorial
-          let thetaWobble: number; // Organic camera shake
-
-          if (t < ACT1_END) {
-            // ACT 1: THE HESITATION
-            // Almost no gravity. Camera floats. You feel weightless.
-            // A slight pull-back even, for the "establishing wide."
-            const actProgress = t / ACT1_END;
-            gravityScale = 3.0 + actProgress * 3.0; // 3 -> 6 (gentle)
-            phiDriftRate = 0.05; // Very slow tilt
-
-            // Subtle "last look" wobble -- the camera is studying the black hole
-            thetaWobble = Math.sin(t * 0.4) * 0.003;
-          } else if (t < ACT2_END) {
-            // ACT 2: THE COMMITMENT
-            // Gravity becomes real. The spiral tightens. No turning back.
-            const actProgress = (t - ACT1_END) / (ACT2_END - ACT1_END);
-            gravityScale = 6.0 + actProgress * 12.0; // 6 -> 18
-            phiDriftRate = 0.1 + actProgress * 0.15; // Accelerating tilt
-
-            // Growing unease - camera vibration increases
-            thetaWobble = Math.sin(t * 0.8) * 0.005 * (1 + actProgress);
-          } else {
-            // ACT 3: THE MAELSTROM
-            // Full Newtonian fury. The vortex consumes everything.
-            // Gravity is overwhelming. Spin is frantic.
-            const actDuration = t - ACT2_END;
-            const intensity = Math.min(actDuration * 0.15, 1.0); // Ramps over ~7s
-            gravityScale = 18.0 + intensity * 20.0; // 18 -> 38
-            phiDriftRate = 0.25 + intensity * 0.25; // Fast equatorial lock
-
-            // Violent camera shake near the horizon
-            const shakeIntensity = 0.008 + intensity * 0.015;
-            thetaWobble =
-              Math.sin(t * 2.1) * shakeIntensity +
-              Math.cos(t * 3.7) * shakeIntensity * 0.6;
-          }
-
-          // --- Radial Physics ---
-          const gravity = -gravityScale / (r * r + 0.1);
-          cinematicRef.current.velocity += gravity * dt;
-          const newR = r + cinematicRef.current.velocity * dt;
-
-          // --- Angular Physics (Conservation of Momentum: L = r^2 * omega) ---
-          const L = cinematicRef.current.angularMomentum;
-          const omegaProp = L / (newR * newR + 0.1);
-          state.theta += omegaProp * dt + thetaWobble;
-
-          // --- Inclination: Drift toward equatorial plane ---
-          const distToEquator = Math.PI * 0.5 - state.phi;
-          state.phi += distToEquator * dt * phiDriftRate;
-
-          // Subtle phi wobble for "tumbling through spacetime" feel
-          if (t > ACT2_END) {
-            const phiWobble =
-              Math.sin(t * 1.7) * 0.004 + Math.cos(t * 2.9) * 0.003;
-            state.phi += phiWobble;
-          }
-
-          // --- HORIZON CROSSING LOGIC ---
-          if (newR < 2.0) {
-            // Horizon crossing -> Begin smooth recovery to pre-dive position
-            cinematicRef.current.active = false;
-            cinematicRef.current.mode = null;
-            cinematicRef.current.velocity = 0;
-            cinematicRef.current.angularMomentum = 0;
-            cinematicRef.current.recovering = true;
-            cinematicRef.current.recoverStartTime = now;
-
-            // Clear velocities so recovery isn't fighting residual momentum
-            state.thetaVelocity = 0;
-            state.phiVelocity = 0;
-            state.zoomVelocity = 0;
-
-            // Restore autoSpin and unpause
-            setParams((prev) => ({
-              ...prev,
-              autoSpin: DEFAULT_AUTO_SPIN,
-              paused: false,
-            }));
-
-            // Sync UI State
-            setIsCinematic(false);
-            setCinematicMode(null);
-            setCurrentViewpointId(null);
-          } else {
-            // Apply Zoom (only during active dive)
-            setParams((prev) => ({ ...prev, zoom: Math.max(0.2, newR) }));
-          }
+        if (cine.mode === "viewpoint" || cine.mode === "viewpoints-tour") {
+          // VIEWPOINT: FLY-TO-AND-DWELL (fly 4s, then characteristic dwell)
+          tour.stepViewpoint(now, dt);
+        } else if (cine.mode === "orbit") {
+          // ORBIT TOUR: "THE GRAND SURVEY" (4-act keyframes + organic feel)
+          tour.stepOrbit(now, dt, t);
+        } else if (cine.mode === "dive") {
+          // INFALL DIVE: "THE DESCENT INTO GARGANTUA" (3-act geodesic plunge)
+          tour.stepDive(now, dt);
         }
 
         // Apply Damping for user input during cinematic
-        state.thetaVelocity *= 0.95;
-        state.phiVelocity *= 0.95;
+        const cinematicDamping = Math.pow(0.95, step);
+        state.thetaVelocity *= cinematicDamping;
+        state.phiVelocity *= cinematicDamping;
 
-        state.theta += state.thetaVelocity;
-        state.phi += state.phiVelocity;
+        state.theta += state.thetaVelocity * step;
+        state.phi += state.phiVelocity * step;
 
         state.phi = Math.max(0.001, Math.min(Math.PI - 0.001, state.phi));
       } else {
         // --- INTERACTIVE MODE: USER CONTROL ---
-        // Apply Drag Inertia / Momentum
-        state.thetaVelocity *= state.damping;
-        state.phiVelocity *= state.damping;
-        state.zoomVelocity *= state.damping;
+        // Apply Drag Inertia / Momentum (per-60Hz-frame constants, scaled
+        // by the actual elapsed step so the decay is wall-clock based).
+        const damping = Math.pow(state.damping, step);
+        state.thetaVelocity *= damping;
+        state.phiVelocity *= damping;
+        state.zoomVelocity *= damping;
 
-        state.theta += state.thetaVelocity;
-        state.phi += state.phiVelocity;
+        state.theta += state.thetaVelocity * step;
+        state.phi += state.phiVelocity * step;
 
-        // Auto-Spin
-        const spinSpeed = paramsRef.current.autoSpin ?? DEFAULT_AUTO_SPIN;
+        // Auto-Spin (rad per 60Hz frame -> rad per second via `step`)
+        const spinSpeed = rig.paramsRef.current.autoSpin ?? DEFAULT_AUTO_SPIN;
         if (
-          !isDragging.current &&
-          touchState.current.touches.length === 0 &&
+          !rig.isDragging.current &&
+          rig.touchState.current.touches.length === 0 &&
           Math.abs(state.thetaVelocity) < 0.0001
         ) {
-          state.theta += spinSpeed;
+          state.theta += spinSpeed * step;
         }
 
         // Constraints
@@ -765,29 +240,59 @@ export function useCamera(
         if (Math.abs(state.zoomVelocity) < 0.00001) state.zoomVelocity = 0;
       }
 
-      // --- Sync to React State ---
-      // We only update React state periodically to save render cost,
-      // BUT we do it often enough for smooth visual feedback.
-      frameCount++;
-      if (frameCount >= SYNC_INTERVAL) {
-        frameCount = 0;
-        setCameraState({ ...state }); // Clone to trigger re-render
+      // Publish the integrated pose at rAF rate for the renderers (see
+      // engine/camera-live). Placed AFTER integration so readers get this
+      // tick's pose (≤1 frame lag regardless of rAF ordering). This is what
+      // makes camera motion smooth: the React sync below is gated to ~10Hz
+      // idle, which would otherwise step the uniforms visibly (judder →
+      // dizziness with auto-spin on).
+      pushLiveCamera(state.theta, state.phi);
 
-        // Zoom sync to Params (Interactive Mode Only)
-        // In Cinematic mode, zoom is handled explicitly inside the block above
+      // --- Sync to React State ---
+      // Gated push: cinematic/recovery sync at 30Hz for smooth uniforms;
+      // drag input syncs via coalesced events in useCameraInput (so the loop
+      // must NOT fast-path on isDragging — it would just duplicate those
+      // pushes); idle drift syncs only on real accumulated motion or
+      // heartbeat. Previously this pushed unconditionally every 2 frames,
+      // re-rendering the entire App (ControlPanel, Telemetry, …) 30x/sec
+      // even when the camera was effectively static.
+      const fastPath = cine.active || cine.recovering;
+      frameCount++;
+      if (frameCount >= (fastPath ? SYNC_INTERVAL_ACTIVE : SYNC_INTERVAL_IDLE)) {
+        frameCount = 0;
+        // Shortest wrapped distance for theta (mod 2π).
+        let dTheta =
+          Math.abs(state.theta - rig.lastSynced.current.theta) % (2 * Math.PI);
+        if (dTheta > Math.PI) dTheta = 2 * Math.PI - dTheta;
+        const dPhi = Math.abs(state.phi - rig.lastSynced.current.phi);
+        const heartbeat = now - rig.lastSynced.current.time > SYNC_HEARTBEAT_MS;
+
         if (
-          !cinematicRef.current.active &&
-          Math.abs(state.zoomVelocity) > 0.0001
+          fastPath ||
+          dTheta > SYNC_EPSILON_RAD ||
+          dPhi > SYNC_EPSILON_RAD ||
+          heartbeat
         ) {
-          setParams((prev) => ({
-            ...prev,
-            zoom: clampAndValidate(
-              prev.zoom + state.zoomVelocity,
-              MIN_ZOOM,
-              MAX_ZOOM,
-              prev.zoom,
-            ),
-          }));
+          rig.lastSynced.current = {
+            theta: state.theta,
+            phi: state.phi,
+            time: now,
+          };
+          setCameraState({ ...state }); // Clone to trigger re-render
+
+          // Zoom sync to Params (Interactive Mode Only)
+          // In Cinematic mode, zoom is handled explicitly inside the block above
+          if (!cine.active && Math.abs(state.zoomVelocity) > 0.0001) {
+            setParams((prev) => ({
+              ...prev,
+              zoom: clampAndValidate(
+                prev.zoom + state.zoomVelocity * step,
+                MIN_ZOOM,
+                MAX_ZOOM,
+                prev.zoom,
+              ),
+            }));
+          }
         }
       }
 
@@ -798,521 +303,27 @@ export function useCamera(
     return () => cancelAnimationFrame(animationFrameId);
   }, [setParams]); // No other dependencies needed!
 
-  // --- Input Handlers (Mutate Ref Directly) ---
-
-  const stopCinematic = useCallback(() => {
-    if (cinematicRef.current.active || cinematicRef.current.recovering) {
-      // Restore autoSpin if we killed it for a dive
-      if (cinematicRef.current.mode === "dive") {
-        setParams((prev) => ({ ...prev, autoSpin: DEFAULT_AUTO_SPIN }));
-      }
-
-      cinematicRef.current.active = false;
-      cinematicRef.current.mode = null;
-      cinematicRef.current.recovering = false;
-      setIsCinematic(false);
-      setCinematicMode(null);
-      setCurrentViewpointId(null);
-    }
-  }, [setParams]);
-
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => {
-      if (!isValidNumber(e.clientX) || !isValidNumber(e.clientY)) return;
-
-      // Support left-click (button 0) and right-click (button 2) for orbiting.
-      // Right-click provides an accessible alternative for users who may find
-      // left-click drag awkward, and enables simultaneous interaction with
-      // UI elements that use left-click.
-      if (e.button !== 0 && e.button !== 2) return;
-
-      // Only stop cinematic if we are NOT in a controlled dive
-      if (cinematicRef.current.mode !== "dive") {
-        stopCinematic();
-      }
-
-      isDragging.current = true;
-      lastMousePos.current.x = e.clientX;
-      lastMousePos.current.y = e.clientY;
-
-      // Kill momentum on grab
-      physicsRef.current.thetaVelocity = 0;
-      physicsRef.current.phiVelocity = 0;
-    },
-    [stopCinematic],
-  );
-
-  const handleMouseMove = useCallback((e: React.MouseEvent) => {
-    if (!isValidNumber(e.clientX) || !isValidNumber(e.clientY)) return;
-    if (isDragging.current) {
-      const deltaX = e.clientX - lastMousePos.current.x;
-      const deltaY = e.clientY - lastMousePos.current.y;
-      if (!isValidNumber(deltaX) || !isValidNumber(deltaY)) return;
-
-      const sensitivity = 0.008;
-
-      // Directly mutate physics state
-      // Note: We add to position AND set velocity (for "throw" momentum on release)
-      physicsRef.current.theta += deltaX * sensitivity;
-      physicsRef.current.phi += deltaY * sensitivity;
-      physicsRef.current.thetaVelocity = deltaX * sensitivity * 0.4;
-      physicsRef.current.phiVelocity = deltaY * sensitivity * 0.4;
-
-      lastMousePos.current.x = e.clientX;
-      lastMousePos.current.y = e.clientY;
-
-      // Force immediate sync to React for responsive drag
-      setCameraState({ ...physicsRef.current });
-    }
-  }, []);
-
-  const handleMouseUp = useCallback(() => {
-    isDragging.current = false;
-  }, []);
-
-  const nudgeCamera = useCallback(
-    (dTheta: number, dPhi: number) => {
-      stopCinematic();
-      physicsRef.current.thetaVelocity += dTheta;
-      physicsRef.current.phiVelocity += dPhi;
-    },
-    [stopCinematic],
-  );
-
-  const startCinematic = useCallback(
-    (mode: "orbit" | "dive") => {
-      // Honor the user-agent reduced-motion preference: WCAG 2.2 SC 2.3.3
-      // requires non-essential motion to be opt-out. Cinematic auto-orbit
-      // is decorative; we silently no-op rather than override the setting.
-      if (
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        return;
-      }
-      // 1. Clean up existing state (Force Stop any previous cinematic)
-      stopCinematic();
-
-      // 2. Clear interaction state to prevent "Phantom Drag" blocking the animation
-      isDragging.current = false;
-      touchState.current.touches = [];
-
-      // 3. Clear velocities to prevent "Phantom Momentum" jitter
-      physicsRef.current.thetaVelocity = 0;
-      physicsRef.current.phiVelocity = 0;
-      physicsRef.current.zoomVelocity = 0;
-
-      // 4. Capture current state as start state
-      const now = performance.now();
-      cinematicRef.current = {
-        active: true,
-        mode,
-        startTime: now,
-        lastTime: now,
-        startParams: {
-          theta: physicsRef.current.theta,
-          phi: physicsRef.current.phi,
-          zoom: paramsRef.current.zoom,
-        },
-        velocity: 0,
-        angularMomentum: 0,
-        recovering: false,
-        recoverStartTime: 0,
-      };
-
-      if (mode === "dive") {
-        // Angular Momentum: L = r^2 * omega
-        // omega ~0.3 for a wide, dramatic spiral
-        const initialOmega = 0.3;
-        const r = paramsRef.current.zoom;
-        cinematicRef.current.angularMomentum = r * r * initialOmega;
-
-        // Barely a nudge inward. Act 1 ("The Hesitation") handles the
-        // slow buildup. This just tips you over the edge.
-        cinematicRef.current.velocity = -0.15;
-
-        // Start above the disk for the establishing wide shot.
-        // ~54 degrees from pole -> looking down at the disk
-        physicsRef.current.phi = Math.PI * 0.3;
-
-        // Offset theta for a dynamic spiral entry
-        physicsRef.current.theta += Math.PI * 0.25;
-      }
-
-      setIsCinematic(true);
-      setCinematicMode(mode);
-
-      // Reset any active auto-spin param that might conflict
-      // But for Infall, we calculate spin manually.
-      if (mode === "dive") {
-        setParams((p) => ({ ...p, autoSpin: 0 })); // Disable artificial spin
-      }
-    },
-    [setParams, stopCinematic],
-  );
-
-  /**
-   * Start a full viewpoints auto-tour. Cycles through ALL VIEWPOINTS
-   * sequentially, flying to each, dwelling, then advancing to the next.
-   */
-  const startAllViewpointsTour = useCallback(() => {
-    if (
-      typeof window !== "undefined" &&
-      window.matchMedia("(prefers-reduced-motion: reduce)").matches
-    ) {
-      return;
-    }
-
-    // Stop any existing cinematic
-    stopCinematic();
-
-    isDragging.current = false;
-    touchState.current.touches = [];
-    physicsRef.current.thetaVelocity = 0;
-    physicsRef.current.phiVelocity = 0;
-    physicsRef.current.zoomVelocity = 0;
-
-    const now = performance.now();
-    const currentTheta = physicsRef.current.theta;
-    const currentPhi = physicsRef.current.phi;
-    const currentZoom = paramsRef.current.zoom;
-
-    // Collect all viewpoint IDs
-    const allIds: string[] = VIEWPOINTS.map(
-      (vp: { id: string }) => vp.id,
-    );
-    const firstId = allIds[0];
-    const firstDef = firstId ? getViewpoint(firstId) : undefined;
-
-    if (!firstDef) return;
-
-    const DWELL_PER_VIEWPOINT = 10.0; // seconds per viewpoint
-
-    cinematicRef.current = {
-      active: true,
-      mode: "viewpoints-tour",
-      startTime: now,
-      lastTime: now,
-      startParams: {
-        theta: currentTheta,
-        phi: currentPhi,
-        zoom: currentZoom,
-      },
-      velocity: 0,
-      angularMomentum: 0,
-      recovering: false,
-      recoverStartTime: 0,
-      // First viewpoint flight
-      viewpointId: firstDef.id,
-      viewpointPhase: "flying",
-      viewpointStartParams: {
-        theta: currentTheta,
-        phi: currentPhi,
-        zoom: currentZoom,
-      },
-      viewpointTargetParams: {
-        theta: firstDef.camera.theta,
-        phi: firstDef.camera.phi,
-        zoom: firstDef.camera.zoom,
-      },
-      viewpointPhaseStartTime: now,
-      viewpointAnimType: firstDef.animation.type,
-      viewpointAnimSpeed: firstDef.animation.speed ?? 0.1,
-      // Tour state
-      tourViewpointIds: allIds,
-      tourIndex: 0,
-      tourTotal: allIds.length,
-      tourDwellDuration: DWELL_PER_VIEWPOINT,
-    };
-
-    setIsCinematic(true);
-    setCinematicMode("viewpoints-tour");
-    setCurrentViewpointId(firstDef.id);
-    setTourIndex(0);
-    setTourTotal(allIds.length);
-
-    setParams((p) => ({ ...p, autoSpin: 0 }));
-  }, [setParams, stopCinematic]);
-
-  /**
-   * Start a viewpoint fly-to. Smoothly moves the camera to a pre-defined
-   * position and dwells with a characteristic animation (orbit/drift/still).
-   */
-  const startViewpoint = useCallback(
-    (viewpointId: string) => {
-      // Honor reduced-motion preference
-      if (
-        typeof window !== "undefined" &&
-        window.matchMedia("(prefers-reduced-motion: reduce)").matches
-      ) {
-        return;
-      }
-
-      const viewpointDef = getViewpoint(viewpointId);
-      if (!viewpointDef) return;
-
-      // Stop any existing cinematic (orbit/dive/viewpoint). This also
-      // clears isCinematic, setCinematicMode, and currentViewpointId.
-      stopCinematic();
-
-      // Clear interaction state to prevent phantom drag blocking
-      isDragging.current = false;
-      touchState.current.touches = [];
-
-      // Clear velocities
-      physicsRef.current.thetaVelocity = 0;
-      physicsRef.current.phiVelocity = 0;
-      physicsRef.current.zoomVelocity = 0;
-
-      const now = performance.now();
-      const currentTheta = physicsRef.current.theta;
-      const currentPhi = physicsRef.current.phi;
-      const currentZoom = paramsRef.current.zoom;
-
-      cinematicRef.current = {
-        active: true,
-        mode: "viewpoint",
-        startTime: now,
-        lastTime: now,
-        startParams: {
-          theta: currentTheta,
-          phi: currentPhi,
-          zoom: currentZoom,
-        },
-        velocity: 0,
-        angularMomentum: 0,
-        recovering: false,
-        recoverStartTime: 0,
-        viewpointId: viewpointDef.id,
-        viewpointPhase: "flying",
-        viewpointStartParams: {
-          theta: currentTheta,
-          phi: currentPhi,
-          zoom: currentZoom,
-        },
-        viewpointTargetParams: {
-          theta: viewpointDef.camera.theta,
-          phi: viewpointDef.camera.phi,
-          zoom: viewpointDef.camera.zoom,
-        },
-        viewpointPhaseStartTime: now,
-        viewpointAnimType: viewpointDef.animation.type,
-        viewpointAnimSpeed: viewpointDef.animation.speed ?? 0.1,
-      };
-
-      setIsCinematic(true);
-      setCinematicMode("viewpoint");
-      setCurrentViewpointId(viewpointDef.id);
-
-      // Disable artificial auto-spin during viewpoint (the viewpoint's
-      // characteristic animation replaces it)
-      setParams((p) => ({ ...p, autoSpin: 0 }));
-    },
-    [setParams, stopCinematic],
-  );
-
-  const handleWheel = useCallback(
-    (e: React.WheelEvent | WheelEvent) => {
-      e.preventDefault();
-      if (!isValidNumber(e.deltaY)) return;
-
-      if (cinematicRef.current.mode !== "dive") {
-        stopCinematic();
-      }
-
-      // Power-curve zoom sensitivity: always positive and scales naturally
-      // across the 0.5–500 range. Uses sqrt(ratio) so:
-      //   zoom=0.5 → 0.002  (fine control near event horizon)
-      //   zoom=30  → 0.015  (normal feel at default distance)
-      //   zoom=500 → 0.061  (fast traversal at max range)
-      const currentZoom = paramsRef.current.zoom;
-      const ratio = currentZoom / 30.0;
-      const sensitivity = 0.015 * Math.sqrt(ratio);
-      const zoomDelta = e.deltaY * sensitivity;
-
-      // Apply via velocity for smooth momentum feel, then clamp
-      physicsRef.current.zoomVelocity = zoomDelta * 0.4;
-
-      setParams((prev) => ({
-        ...prev,
-        zoom: clampAndValidate(
-          prev.zoom + zoomDelta,
-          MIN_ZOOM,
-          MAX_ZOOM,
-          prev.zoom,
-        ),
-      }));
-    },
-    [setParams, stopCinematic],
-  );
-
-  const handleTouchStart = useCallback(
-    (e: React.TouchEvent | TouchEvent) => {
-      e.preventDefault();
-
-      // Only stop cinematic if we are NOT in a controlled dive
-      // Match Desktop behavior: Allow user to look around while falling.
-      if (cinematicRef.current.mode !== "dive") {
-        stopCinematic();
-      }
-
-      const touches = Array.from(e.touches) as React.Touch[];
-      if (touches.length === 0) return;
-      touchState.current.touches = touches;
-
-      const isValidTouch = (t: React.Touch) =>
-        !isNaN(t.clientX) && !isNaN(t.clientY);
-
-      if (touches.length === 2) {
-        const [t0, t1] = touches;
-        if (!t0 || !t1 || !isValidTouch(t0) || !isValidTouch(t1)) return;
-        const dx = t1.clientX - t0.clientX;
-        const dy = t1.clientY - t0.clientY;
-        touchState.current.initialDistance = Math.hypot(dx, dy);
-        touchState.current.initialAngle = Math.atan2(dy, dx);
-        touchState.current.initialCenter = {
-          x: (t0.clientX + t1.clientX) / 2,
-          y: (t0.clientY + t1.clientY) / 2,
-        };
-      } else if (touches.length === 1) {
-        const [t0] = touches;
-        if (!t0 || !isValidTouch(t0)) return;
-        lastMousePos.current.x = t0.clientX;
-        lastMousePos.current.y = t0.clientY;
-        physicsRef.current.thetaVelocity = 0;
-        physicsRef.current.phiVelocity = 0;
-      }
-    },
-    [stopCinematic],
-  );
-
-  const handleTouchMove = useCallback(
-    (e: React.TouchEvent | TouchEvent) => {
-      e.preventDefault();
-      const touches = Array.from(e.touches) as React.Touch[];
-      if (touches.length === 0) return;
-
-      if (touches.length === 2) {
-        const [t0, t1] = touches;
-        if (!t0 || !t1) return;
-        const dx = t1.clientX - t0.clientX;
-        const dy = t1.clientY - t0.clientY;
-        const currentDistance = Math.hypot(dx, dy);
-        const currentCenter = {
-          x: (t0.clientX + t1.clientX) / 2,
-          y: (t0.clientY + t1.clientY) / 2,
-        };
-
-        // Zoom
-        if (touchState.current.initialDistance > 0) {
-          const ratio = currentDistance / touchState.current.initialDistance;
-          const zoomDelta = (1 - ratio) * 2.0;
-          setParams((prev) => ({
-            ...prev,
-            zoom: clampAndValidate(
-              prev.zoom + zoomDelta,
-              MIN_ZOOM,
-              MAX_ZOOM,
-              prev.zoom,
-            ),
-          }));
-          touchState.current.initialDistance = currentDistance;
-        }
-
-        // Pan (Move Camera)
-        const panX = currentCenter.x - touchState.current.initialCenter.x;
-        const panY = currentCenter.y - touchState.current.initialCenter.y;
-
-        if (Math.abs(panX) > 2 || Math.abs(panY) > 2) {
-          const sensitivity = 0.003;
-          physicsRef.current.theta += panX * sensitivity;
-          physicsRef.current.phi += panY * sensitivity;
-          touchState.current.initialCenter = currentCenter;
-        }
-      } else if (touches.length === 1) {
-        const [t0] = touches;
-        if (!t0) return;
-        const deltaX = t0.clientX - lastMousePos.current.x;
-        const deltaY = t0.clientY - lastMousePos.current.y;
-        const sensitivity = 0.005;
-
-        physicsRef.current.theta += deltaX * sensitivity;
-        physicsRef.current.phi += deltaY * sensitivity;
-        physicsRef.current.thetaVelocity = deltaX * sensitivity * 0.5;
-        physicsRef.current.phiVelocity = deltaY * sensitivity * 0.5;
-
-        lastMousePos.current.x = t0.clientX;
-        lastMousePos.current.y = t0.clientY;
-      }
-      setCameraState({ ...physicsRef.current });
-    },
-    [setParams],
-  );
-
-  const handleTouchEnd = useCallback((e: React.TouchEvent | TouchEvent) => {
-    e.preventDefault();
-    const touches = Array.from(e.touches) as React.Touch[];
-    touchState.current.touches = touches;
-    if (touches.length === 0) {
-      touchState.current.initialDistance = 0;
-      touchState.current.initialAngle = 0;
-    }
-  }, []);
-
-  const resetCamera = useCallback(() => {
-    // 1. Force Stop Cinematic (Full cleanup)
-    cinematicRef.current.active = false;
-    cinematicRef.current.mode = null;
-    cinematicRef.current.velocity = 0;
-    cinematicRef.current.angularMomentum = 0;
-    cinematicRef.current.recovering = false; // Cancel any recovery in progress
-    setIsCinematic(false);
-    setCinematicMode(null);
-    setCurrentViewpointId(null);
-
-    // 2. Reset Physics State
-    physicsRef.current = {
-      theta: Math.PI,
-      phi: DEFAULT_VERTICAL_ANGLE,
-      thetaVelocity: 0,
-      phiVelocity: 0,
-      zoomVelocity: 0,
-      damping: 0.92,
-    };
-
-    // 3. Force React State Update (Critical for UI Sync)
-    setCameraState({ ...physicsRef.current });
-
-    // 4. Reset Simulation Params (Zoom, AutoSpin, Pause)
-    setParams((prev) => ({
-      ...prev,
-      zoom: DEFAULT_ZOOM,
-      autoSpin: DEFAULT_AUTO_SPIN,
-      paused: false, // Guarantee simulation runs after reset
-    }));
-  }, [setParams]);
-
   return {
     mouse,
     cameraState,
-    handleMouseDown,
-    handleMouseMove,
-    handleMouseUp,
-    handleWheel,
-    handleTouchStart,
-    handleTouchMove,
-    handleTouchEnd,
-    nudgeCamera,
-    startCinematic,
-    startViewpoint,
-    startAllViewpointsTour,
-    stopCinematic,
-    resetCamera,
-    isCinematic,
-    cinematicMode,
-    currentViewpointId,
-    currentViewpointDef,
-    tourIndex,
-    tourTotal,
+    handleMouseDown: input.handleMouseDown,
+    handleMouseMove: input.handleMouseMove,
+    handleMouseUp: input.handleMouseUp,
+    handleWheel: input.handleWheel,
+    handleTouchStart: input.handleTouchStart,
+    handleTouchMove: input.handleTouchMove,
+    handleTouchEnd: input.handleTouchEnd,
+    nudgeCamera: input.nudgeCamera,
+    startCinematic: tour.startCinematic,
+    startViewpoint: tour.startViewpoint,
+    startAllViewpointsTour: tour.startAllViewpointsTour,
+    stopCinematic: tour.stopCinematic,
+    resetCamera: tour.resetCamera,
+    isCinematic: tour.isCinematic,
+    cinematicMode: tour.cinematicMode,
+    currentViewpointId: tour.currentViewpointId,
+    currentViewpointDef: tour.currentViewpointDef,
+    tourIndex: tour.tourIndex,
+    tourTotal: tour.tourTotal,
   };
 }

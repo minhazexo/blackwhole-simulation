@@ -2,6 +2,7 @@
 
 import React, { useMemo } from "react";
 import * as THREE from "three";
+import { horizonRadius } from "@/physics/kerr";
 
 interface LightConesProps {
   mass: number;
@@ -46,7 +47,7 @@ export function LightCones({
     const M = mass;
     const a = Math.abs(spin) * M;
     const a2 = a * a;
-    const rh = M + Math.sqrt(Math.max(0, M * M - a2));
+    const rh = horizonRadius(M, spin);
 
     // -----------------------------------------------------------------
     // KERR METRIC FUNCTIONS (from kerr.rs + metric.rs)
@@ -139,10 +140,7 @@ export function LightCones({
     return positions;
   }, [mass, spin, nRadial, nAngular]);
 
-  const rh = useMemo(() => {
-    const a = Math.abs(spin) * mass;
-    return mass + Math.sqrt(Math.max(0, mass * mass - a * a));
-  }, [mass, spin]);
+  const rh = useMemo(() => horizonRadius(mass, spin), [mass, spin]);
 
   return (
     <group>

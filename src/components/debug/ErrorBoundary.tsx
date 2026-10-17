@@ -1,7 +1,7 @@
 "use client";
 
 import { Component, type ErrorInfo, type ReactNode } from "react";
-import errorTracker from "@/utils/errorTracking";
+import errorTracker from "@/utils/error-tracking";
 import { ErrorDisplay } from "./ErrorDisplay";
 
 interface Props {

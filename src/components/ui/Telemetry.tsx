@@ -5,6 +5,7 @@
  * Requirements: 10.1, 10.2, 10.3, 10.4, 10.5, 10.6, 12.4, 12.5
  */
 
+import { memo } from "react";
 import type { SimulationParams } from "@/types/simulation";
 import type { PerformanceMetrics } from "@/performance/monitor";
 import { usePhysicsState } from "@/hooks/usePhysicsState";
@@ -27,11 +28,13 @@ function fixedWidth(
   return (sign + body).padStart(totalWidth, " ");
 }
 
-export const Telemetry = ({
+// Memoized: metrics/params identities only change on real updates, so the
+// ~10Hz idle App renders (camera syncs) skip this subtree entirely.
+export const Telemetry = memo(function Telemetry({
   params,
   metrics,
   budgetUsage = 0,
-}: TelemetryProps) => {
+}: TelemetryProps) {
   const { eventHorizonRadius, timeDilation, redshift } =
     usePhysicsState(params);
 
@@ -112,4 +115,4 @@ export const Telemetry = ({
       )}
     </div>
   );
-};
+});

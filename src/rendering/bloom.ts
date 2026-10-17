@@ -15,8 +15,8 @@ import {
   brightPassShader,
   blurShader,
   combineShader,
-} from "../shaders/postprocess/bloom.glsl";
-import { createQuadBuffer } from "../utils/webgl-utils";
+} from "@/shaders/postprocess/bloom.glsl";
+import { createShader, createProgram, getSharedQuadBuffer } from "@/utils/webgl-utils";
 
 /**
  * Bloom configuration
@@ -74,6 +74,13 @@ export class BloomManager {
   // Canvas dimensions
   private width: number = 0;
   private height: number = 0;
+  // Cached half-resolution dimensions (recalculated on resize)
+  private halfWidth: number = 0;
+  private halfHeight: number = 0;
+  private quarterWidth: number = 0;
+  private quarterHeight: number = 0;
+  // Pre-allocated viewport array to avoid per-frame allocation
+  private readonly _viewport: [number, number, number, number] = [0, 0, 0, 0];
 
   // Phase 2: Cached uniform and attribute locations
   // Eliminates ~16 gl.getUniformLocation() string lookups per frame
@@ -130,23 +137,22 @@ export class BloomManager {
    * Requirements: 8.1, 8.3
    */
   initialize(width: number, height: number): boolean {
-    this.width = width;
-    this.height = height;
+    this.applyDimensions(width, height);
 
     try {
       // Create full-screen quad buffer
-      this.quadBuffer = createQuadBuffer(this.gl);
+      this.quadBuffer = getSharedQuadBuffer(this.gl);
       if (!this.quadBuffer) {
         throw new Error("Failed to create quad buffer");
       }
 
       // Compile shader programs
-      this.brightPassProgram = this.createProgram(
+      this.brightPassProgram = this.buildProgram(
         bloomVertexShader,
         brightPassShader,
       );
-      this.blurProgram = this.createProgram(bloomVertexShader, blurShader);
-      this.combineProgram = this.createProgram(
+      this.blurProgram = this.buildProgram(bloomVertexShader, blurShader);
+      this.combineProgram = this.buildProgram(
         bloomVertexShader,
         combineShader,
       );
@@ -172,6 +178,43 @@ export class BloomManager {
       this.cleanup();
       return false;
     }
+  }
+
+  /**
+   * Record the canvas dimensions and derive every dependent field
+   * (half/quarter buffers + the combine-pass viewport).
+   *
+   * Must run from BOTH initialize() and resize(): the fields below used to be
+   * assigned only inside resize(), so after a plain init the combine pass was
+   * issued with a (0,0,0,0) viewport (nothing presented -> black/stale canvas)
+   * and the bright/blur passes rendered into a 1x1 corner of their targets.
+   */
+  private applyDimensions(width: number, height: number): void {
+    this.width = width;
+    this.height = height;
+    this.halfWidth = Math.max(1, Math.floor(width / 2));
+    this.halfHeight = Math.max(1, Math.floor(height / 2));
+    this.quarterWidth = Math.max(1, Math.floor(width / 4));
+    this.quarterHeight = Math.max(1, Math.floor(height / 4));
+    this._viewport[0] = 0;
+    this._viewport[1] = 0;
+    this._viewport[2] = width;
+    this._viewport[3] = height;
+  }
+
+  /**
+   * Zero a render target. Textures are allocated with `null` data, and the
+   * GPU guarantees neither a zeroed nor a stable initial content -- leaving
+   * them undefined made the first frames (and any frame after a resize)
+   * sample driver garbage when a pass does not cover the whole attachment.
+   */
+  private clearTarget(framebuffer: WebGLFramebuffer | null): void {
+    if (!framebuffer) return;
+    const gl = this.gl;
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.clearColor(0, 0, 0, 0);
+    gl.clear(gl.COLOR_BUFFER_BIT);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
   }
 
   /**
@@ -202,6 +245,12 @@ export class BloomManager {
     this.blurTexture2 = this.createTexture(blurWidth, blurHeight);
     if (!this.blurTexture2) throw new Error("Failed to create blur texture 2");
     this.blurFramebuffer2 = this.createFramebuffer(this.blurTexture2);
+
+    // Defined starting state for every attachment (see clearTarget).
+    this.clearTarget(this.sceneFramebuffer);
+    this.clearTarget(this.brightFramebuffer);
+    this.clearTarget(this.blurFramebuffer1);
+    this.clearTarget(this.blurFramebuffer2);
   }
 
   /**
@@ -275,57 +324,24 @@ export class BloomManager {
   }
 
   /**
-   * Compile shader program
+   * Build shader program via shared webgl-utils (null on failure).
+   * Wraps throwing createShader to preserve the previous null contract.
    */
-  private createProgram(
+  private buildProgram(
     vertexSource: string,
     fragmentSource: string,
   ): WebGLProgram | null {
     const gl = this.gl;
-
-    const vertexShader = this.compileShader(gl.VERTEX_SHADER, vertexSource);
-    const fragmentShader = this.compileShader(
-      gl.FRAGMENT_SHADER,
-      fragmentSource,
-    );
-
-    if (!vertexShader || !fragmentShader) return null;
-
-    const program = gl.createProgram();
-    if (!program) return null;
-
-    gl.attachShader(program, vertexShader);
-    gl.attachShader(program, fragmentShader);
-    gl.linkProgram(program);
-
-    if (!gl.getProgramParameter(program, gl.LINK_STATUS)) {
+    try {
+      const v = createShader(gl, gl.VERTEX_SHADER, vertexSource);
+      const f = createShader(gl, gl.FRAGMENT_SHADER, fragmentSource);
+      if (!v || !f) return null;
+      return createProgram(gl, v, f);
+    } catch (e) {
       // eslint-disable-next-line no-console
-      console.error("Program link error:", gl.getProgramInfoLog(program));
+      console.error("Shader compile error:", e);
       return null;
     }
-
-    return program;
-  }
-
-  /**
-   * Compile shader
-   */
-  private compileShader(type: number, source: string): WebGLShader | null {
-    const gl = this.gl;
-    const shader = gl.createShader(type);
-
-    if (!shader) return null;
-
-    gl.shaderSource(shader, source);
-    gl.compileShader(shader);
-
-    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
-      // eslint-disable-next-line no-console
-      console.error("Shader compile error:", gl.getShaderInfoLog(shader));
-      return null;
-    }
-
-    return shader;
   }
 
   /**
@@ -422,6 +438,11 @@ export class BloomManager {
     this.gl.bindTexture(this.gl.TEXTURE_2D, null);
 
     this.gl.bindFramebuffer(this.gl.FRAMEBUFFER, this.sceneFramebuffer);
+    // Clear the scene target: the scene viewport is the (possibly scaled)
+    // render resolution, so a shrinking/growing render scale would otherwise
+    // leave stale pixels from an older frame in the uncovered region.
+    this.gl.clearColor(0, 0, 0, 1);
+    this.gl.clear(this.gl.COLOR_BUFFER_BIT);
     return this.sceneFramebuffer;
   }
 
@@ -468,10 +489,8 @@ export class BloomManager {
 
     const gl = this.gl;
 
-    // Save current viewport
-    // Optimization: Avoid gl.getParameter(gl.VIEWPORT) which causes pipeline stall
-    // We know the viewport matches our canvas dimensions
-    const viewport = [0, 0, this.width, this.height];
+    // Use cached viewport array (avoids per-frame allocation)
+    const viewport = this._viewport;
 
     // Bind quad buffer
     gl.bindBuffer(gl.ARRAY_BUFFER, this.quadBuffer);
@@ -482,10 +501,9 @@ export class BloomManager {
     }
 
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.brightFramebuffer);
-    // Scale the bright pass viewport by the same renderScale
-    const halfWidth = Math.max(1, Math.floor((this.width * renderScale) / 2));
-    const halfHeight = Math.max(1, Math.floor((this.height * renderScale) / 2));
-    gl.viewport(0, 0, halfWidth, halfHeight);
+    const bw = Math.max(1, Math.floor(this.halfWidth * renderScale));
+    const bh = Math.max(1, Math.floor(this.halfHeight * renderScale));
+    gl.viewport(0, 0, bw, bh);
 
     gl.useProgram(this.brightPassProgram);
 
@@ -518,12 +536,12 @@ export class BloomManager {
       gl.vertexAttribPointer(this.locs.blur_position, 2, gl.FLOAT, false, 0, 0);
     }
 
-    // Set viewport to quarter resolution for blur passes (scaled by renderScale)
-    const blurWidth = Math.max(1, Math.floor((this.width * renderScale) / 4));
-    const blurHeight = Math.max(1, Math.floor((this.height * renderScale) / 4));
-    gl.viewport(0, 0, blurWidth, blurHeight);
+    // Use cached quarter-resolution dimensions for blur passes (scaled by renderScale)
+    const blurW = Math.max(1, Math.floor(this.quarterWidth * renderScale));
+    const blurH = Math.max(1, Math.floor(this.quarterHeight * renderScale));
+    gl.viewport(0, 0, blurW, blurH);
 
-    gl.uniform2f(this.locs.blur_resolution, blurWidth, blurHeight);
+    gl.uniform2f(this.locs.blur_resolution, blurW, blurH);
 
     let currentSourceTexture = this.brightTexture;
 
@@ -671,8 +689,7 @@ export class BloomManager {
       return;
     }
 
-    this.width = width;
-    this.height = height;
+    this.applyDimensions(width, height);
 
     // Recreate framebuffers with new size
     this.cleanupFramebuffers();

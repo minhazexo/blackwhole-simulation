@@ -17,11 +17,16 @@ import {
 } from "lucide-react";
 import { useState } from "react";
 
+interface ErrorCategoryInfo {
+  color: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+}
+
 interface ErrorDisplayProps {
   error: Error | null;
   reset: () => void;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  errorInfo?: any;
+  errorInfo?: React.ErrorInfo | null;
   recoveryCount?: number;
 }
 
@@ -35,8 +40,7 @@ export const ErrorDisplay = ({
   const [copied, setCopied] = useState(false);
 
   // Error Classification Logic (extracted from ErrorBoundary)
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const classifyError = (error: any) => {
+  const classifyError = (error: Error | null): { code: string; category: string; message: string } => {
     if (!error)
       return {
         code: "UNKNOWN",
@@ -47,9 +51,10 @@ export const ErrorDisplay = ({
     let code: string | number | null = null;
     let category = "UNKNOWN";
     const message = error.message || "An unexpected error occurred";
+    const err = error as Error & { status?: number; code?: string | number };
 
-    if (error.status || error.code) {
-      code = error.status || error.code;
+    if (err.status || err.code) {
+      code = err.status ?? err.code ?? null;
       if (typeof code === "number" && code >= 500) category = "HTTP_SERVER";
       else if (typeof code === "number" && code >= 400)
         category = "HTTP_CLIENT";
@@ -81,8 +86,7 @@ export const ErrorDisplay = ({
     } catch (err) {}
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const CATEGORY_MAP: Record<string, any> = {
+  const CATEGORY_MAP: Record<string, ErrorCategoryInfo> = {
     HTTP_CLIENT: {
       color: "text-orange-400",
       label: "Client Error",
@@ -112,7 +116,7 @@ export const ErrorDisplay = ({
     },
   };
 
-  const currentCategory = CATEGORY_MAP[category] || CATEGORY_MAP.UNKNOWN;
+  const currentCategory = (CATEGORY_MAP[category] ?? CATEGORY_MAP.UNKNOWN) as ErrorCategoryInfo;
 
   return (
     <div

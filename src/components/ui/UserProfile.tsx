@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Github, Facebook, User, Globe } from "lucide-react";
+import { User, Globe } from "lucide-react";
+import { FacebookIcon, GithubIcon } from "./BrandIcons";
 
 export const UserProfile = () => {
   const [isOpen, setIsOpen] = useState(false);
@@ -63,7 +64,7 @@ export const UserProfile = () => {
               className="text-white opacity-60 hover:opacity-100 transition-all transform hover:scale-125"
               title="GitHub"
             >
-              <Github className="w-5 h-5 sm:w-6 h-6" />
+              <GithubIcon className="w-5 h-5 sm:w-6 h-6" />
             </a>
             <a
               href="https://www.facebook.com/minhazexo1/"
@@ -72,7 +73,7 @@ export const UserProfile = () => {
               className="text-white opacity-60 hover:opacity-100 transition-all transform hover:scale-125"
               title="Facebook"
             >
-              <Facebook className="w-5 h-5 sm:w-6 h-6" />
+              <FacebookIcon className="w-5 h-5 sm:w-6 h-6" />
             </a>
             <a
               href="https://minhazexo.netlify.app/"

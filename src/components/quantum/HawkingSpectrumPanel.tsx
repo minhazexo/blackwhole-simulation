@@ -12,7 +12,7 @@ import {
   hawkingTemperatureKelvin,
   sampleHawkingSpectrum,
   wienPeakFrequency,
-} from "@/lib/physics/hawking";
+} from "@/physics/hawking";
 
 interface HawkingSpectrumPanelProps {
   /** Black-hole rest mass in kilograms (SI). */
@@ -125,11 +125,11 @@ export function HawkingSpectrumPanel({
                 fontFamily: "monospace",
                 fontSize: 10,
               }}
-              labelFormatter={(value: number) =>
-                `ν = ${(10 ** value).toExponential(2)} Hz`
+              labelFormatter={(value: React.ReactNode) =>
+                `ν = ${(10 ** Number(value)).toExponential(2)} Hz`
               }
-              formatter={(value: number) => [
-                `${(10 ** value).toExponential(2)} W/m²/Hz/sr`,
+              formatter={(value: React.ReactNode) => [
+                `${(10 ** Number(value)).toExponential(2)} W/m²/Hz/sr`,
                 "B_ν",
               ]}
             />

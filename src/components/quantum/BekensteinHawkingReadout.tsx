@@ -4,8 +4,8 @@ import {
   formatScientific,
   horizonAreaSi,
   schwarzschildEvaporationTimeSeconds,
-} from "@/lib/physics/bekenstein";
-import { hawkingTemperatureKelvin } from "@/lib/physics/hawking";
+} from "@/physics/bekenstein";
+import { hawkingTemperatureKelvin } from "@/physics/hawking";
 
 interface BekensteinHawkingReadoutProps {
   /** Black-hole rest mass in kilograms (SI). */

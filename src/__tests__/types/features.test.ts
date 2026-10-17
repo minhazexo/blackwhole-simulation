@@ -5,14 +5,13 @@
 
 import { describe, it, expect } from "vitest";
 import * as fc from "fast-check";
+import type { RayTracingQuality, PresetName } from "@/types/features";
 import {
   getMaxRaySteps,
   validateFeatureToggles,
   getPreset,
   matchesPreset,
-  type RayTracingQuality,
-  type PresetName,
-} from "@/types/features";
+} from "@/config/feature-flags";
 
 describe("Feature Toggles - Property-Based Tests", () => {
   /**

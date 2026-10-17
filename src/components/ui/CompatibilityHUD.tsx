@@ -3,6 +3,7 @@
 import { motion } from "framer-motion";
 import { ExternalLink, ChevronRight, Monitor, Smartphone } from "lucide-react";
 import { useEffect, useState } from "react";
+import { isInAppBrowser } from "@/utils/device-detection";
 
 export const CompatibilityHUD = () => {
   const [env, setEnv] = useState<{
@@ -17,10 +18,7 @@ export const CompatibilityHUD = () => {
     let browser = "Modern Browser";
 
     // In-app detection
-    const isInApp =
-      /Instagram|FBAN|FBAV|LinkedIn|Threads|Messenger|Line|Twitter|MicroMessenger/i.test(
-        ua,
-      );
+    const isInApp = isInAppBrowser(ua);
 
     if (/Windows/i.test(ua)) os = "Windows";
     else if (/Mac/i.test(ua)) os = "macOS";

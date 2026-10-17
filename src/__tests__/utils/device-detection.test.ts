@@ -10,8 +10,8 @@ import {
   isMobileDevice,
   hasIntegratedGPU,
   getHardwareInfo,
-  getMobileRayStepCap,
 } from "@/utils/device-detection";
+import { getMaxRaySteps } from "@/config/feature-flags";
 
 describe("Device Detection", () => {
   beforeEach(() => {
@@ -192,27 +192,37 @@ describe("Device Detection", () => {
     });
   });
 
-  describe("getMobileRayStepCap", () => {
+  describe("getMaxRaySteps mobile cap", () => {
     /**
      * Feature: performance-optimization, Property 20: Mobile ray step cap
      * Validates: Requirements 16.3
      *
-     * For any mobile device, the maximum ray steps should be capped at 100
+     * For any mobile device, the maximum ray steps should be capped at 80
+     * (canonical PERFORMANCE_CONFIG.compute.maxStepsMobile)
      * regardless of the selected quality level.
      */
-    it("caps ray steps at 100 for mobile devices", () => {
+    it("caps ray steps at 80 for mobile devices", () => {
       fc.assert(
-        fc.property(fc.integer({ min: 0, max: 1000 }), (requestedSteps) => {
-          const cappedSteps = getMobileRayStepCap(requestedSteps, true);
+        fc.property(
+          fc.constantFrom("off", "low", "medium", "high", "ultra") as fc.Arbitrary<
+            "off" | "low" | "medium" | "high" | "ultra"
+          >,
+          (quality) => {
+            const cappedSteps = getMaxRaySteps(quality, true);
 
-          // Mobile devices should never exceed 100 steps
-          expect(cappedSteps).toBeLessThanOrEqual(100);
-
-          // Should return the minimum of requested and 100
-          expect(cappedSteps).toBe(Math.min(requestedSteps, 100));
-        }),
+            // Mobile devices should never exceed 80 steps
+            expect(cappedSteps).toBeLessThanOrEqual(80);
+          },
+        ),
         { numRuns: 100 },
       );
+
+      // Canonical spot-checks (rayTracingSteps: off 0, low 32, medium 64, high 128, ultra 256)
+      expect(getMaxRaySteps("ultra", true)).toBe(80);
+      expect(getMaxRaySteps("high", true)).toBe(80);
+      expect(getMaxRaySteps("medium", true)).toBe(64);
+      expect(getMaxRaySteps("low", true)).toBe(32);
+      expect(getMaxRaySteps("off", true)).toBe(0);
     });
 
     /**
@@ -221,15 +231,11 @@ describe("Device Detection", () => {
      * For any non-mobile device, ray steps should not be capped
      */
     it("does not cap ray steps for non-mobile devices", () => {
-      fc.assert(
-        fc.property(fc.integer({ min: 0, max: 1000 }), (requestedSteps) => {
-          const cappedSteps = getMobileRayStepCap(requestedSteps, false);
-
-          // Non-mobile devices should get exactly what they request
-          expect(cappedSteps).toBe(requestedSteps);
-        }),
-        { numRuns: 100 },
-      );
+      expect(getMaxRaySteps("ultra", false)).toBe(256);
+      expect(getMaxRaySteps("high", false)).toBe(128);
+      expect(getMaxRaySteps("medium", false)).toBe(64);
+      expect(getMaxRaySteps("low", false)).toBe(32);
+      expect(getMaxRaySteps("off", false)).toBe(0);
     });
   });
 });

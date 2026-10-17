@@ -1,4 +1,4 @@
-import { PHYSICS_CONSTANTS } from "@/configs/physics.config";
+import { PHYSICS_CONSTANTS } from "@/config/physics.config";
 
 export const DISK_CHUNK = `
   // Accretion Disk Physics & Rendering
@@ -44,8 +44,15 @@ export const DISK_CHUNK = `
               float signSpinPhase = sign(u_spin + 1e-8);
               float OmegaPhase = (signSpinPhase * sqrt_M_phase) / (sampleR * sqrt(sampleR) + a * sqrt_M_phase);
               
-              // Frame-dragged phase rotation
-              float rotAngle = OmegaPhase * u_time * ${PHYSICS_CONSTANTS.accretion.timeScale.toFixed(2)} * 10.0;
+              // Frame-dragged phase rotation.
+              // Wrapped to one turn: sin/cos are periodic, so the pattern is
+              // identical, but the angle stays bounded. An ever-growing angle
+              // loses highp precision in long sessions and makes the disk
+              // turbulence shimmer / repeat incorrectly.
+              float rotAngle = mod(
+                OmegaPhase * u_time * ${PHYSICS_CONSTANTS.accretion.timeScale.toFixed(2)} * 10.0,
+                6.28318530718
+              );
               mat2 rotPhase = mat2(cos(rotAngle), -sin(rotAngle), sin(rotAngle), cos(rotAngle));
               
               vec3 noiseP = sampleP;

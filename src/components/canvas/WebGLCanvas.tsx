@@ -5,6 +5,7 @@ import { WebGLRenderer } from "@/rendering/webgl/renderer";
 import { AlertCircle } from "lucide-react";
 import type { SimulationParams, MouseState } from "@/types/simulation";
 import type { PerformanceMetrics } from "@/performance/monitor";
+import type { RayTracingQuality } from "@/types/features";
 
 interface CanvasError {
   type: "context" | "shader" | "program" | "memory";
@@ -23,6 +24,7 @@ interface WebGLCanvasProps {
   onTouchMove: (e: React.TouchEvent | TouchEvent) => void;
   onTouchEnd: (e: React.TouchEvent | TouchEvent) => void;
   onMetricsUpdate?: (metrics: PerformanceMetrics) => void;
+  onQualityChange?: (quality: RayTracingQuality) => void;
 }
 
 export const WebGLCanvas = ({
@@ -36,6 +38,7 @@ export const WebGLCanvas = ({
   onTouchMove,
   onTouchEnd,
   onMetricsUpdate,
+  onQualityChange,
 }: WebGLCanvasProps) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const rendererRef = useRef<WebGLRenderer | null>(null);
@@ -71,6 +74,57 @@ export const WebGLCanvas = ({
     requestRef.current = requestAnimationFrame(loop);
   };
 
+  const teardown = () => {
+    if (requestRef.current) cancelAnimationFrame(requestRef.current);
+    requestRef.current = 0;
+    if (rendererRef.current) rendererRef.current.cleanup();
+    // Must null the ref so re-initialization isn't skipped by the
+    // `rendererRef.current` guard (see React 18 Strict Mode note below).
+    rendererRef.current = null;
+  };
+
+  const initialize = () => {
+    const canvas = canvasRef.current;
+    if (!canvas || rendererRef.current) return;
+
+    // Ensure canvas has initial size before renderer init.
+    // Smoothness: cap DPR (2.0x backing store = 4x fill-rate on 4K).
+    // Desktop 1.5x is visually lossless for ray-marched content;
+    // mobile is hard-capped to 1.0 to avoid thermal throttling.
+    const isCoarse =
+      typeof window !== "undefined" &&
+      typeof window.matchMedia !== "undefined" &&
+      window.matchMedia("(pointer: coarse)").matches;
+    const dprCap = isCoarse ? 1.0 : 1.5;
+    const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+    canvas.width = Math.floor(window.innerWidth * dpr);
+    canvas.height = Math.floor(window.innerHeight * dpr);
+
+    const renderer = new WebGLRenderer();
+    renderer.onMetricsUpdate = onMetricsUpdate;
+    renderer.onQualityChange = onQualityChange;
+    // Dev-only: repeated lines here = the canvas is remounting in a loop
+    // (each remount recompiles shaders + flashes black).
+    // eslint-disable-next-line no-console
+    console.info("[canvas] WebGL initialize");
+    const success = renderer.init(canvas);
+
+    if (success) {
+      rendererRef.current = renderer;
+      startLoop();
+    } else {
+      setError(
+        renderer.error || { type: "context", message: "WebGL Init Failed" },
+      );
+    }
+  };
+
+  const handleRetry = () => {
+    setError(null);
+    teardown();
+    initialize();
+  };
+
   useEffect(() => {
     paramsRef.current = params;
   }, [params]);
@@ -78,6 +132,16 @@ export const WebGLCanvas = ({
   useEffect(() => {
     mouseRef.current = mouse;
   }, [mouse]);
+
+  // Keep renderer callbacks live without re-initializing the GL context.
+  // (Previously onMetricsUpdate was only assigned at init; a changed
+  // callback prop would go stale for the session.)
+  useEffect(() => {
+    if (rendererRef.current) {
+      rendererRef.current.onMetricsUpdate = onMetricsUpdate;
+      rendererRef.current.onQualityChange = onQualityChange;
+    }
+  });
 
   useEffect(() => {
     // Window-level mouseup: ensures cursor-grabbing doesn't get stuck if
@@ -90,45 +154,72 @@ export const WebGLCanvas = ({
       return () => window.removeEventListener("mouseup", handleWindowUp);
     }
 
-    // Ensure canvas has initial size before renderer init
-    const canvas = canvasRef.current;
-    canvas.width =
-      window.innerWidth * Math.min(window.devicePixelRatio || 1, 2.0);
-    canvas.height =
-      window.innerHeight * Math.min(window.devicePixelRatio || 1, 2.0);
-
-    const renderer = new WebGLRenderer();
-    renderer.onMetricsUpdate = onMetricsUpdate;
-    const success = renderer.init(canvas);
-
-    if (success) {
-      rendererRef.current = renderer;
-      startLoop();
-    } else {
-      setError(
-        renderer.error || { type: "context", message: "WebGL Init Failed" },
-      );
-    }
+    initialize();
 
     return () => {
       window.removeEventListener("mouseup", handleWindowUp);
-      if (requestRef.current) cancelAnimationFrame(requestRef.current);
-      if (rendererRef.current) rendererRef.current.cleanup();
-      // CRITICAL FIX: Must null the ref so React 18 Strict Mode's
+      // CRITICAL FIX: teardown() nulls the ref so React 18 Strict Mode's
       // second mount can re-initialize. Without this, the guard at
       // the top of this effect (`if (rendererRef.current) return`)
       // skips init on the second mount, leaving a dead renderer.
-      rendererRef.current = null;
+      teardown();
     };
   }, [onMetricsUpdate]);
 
+  // GPU context-loss handling: `webglcontextlost` fires e.g. on driver
+  // reset / GPU process crash. preventDefault() allows a later restore.
+  // The renderer is intentionally NOT destroyed here — it is torn down
+  // and re-created in the `webglcontextrestored` handler below.
   useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+
+    const handleContextLost = (e: Event) => {
+      e.preventDefault(); // Allow the context to be restored
+      if (requestRef.current) cancelAnimationFrame(requestRef.current);
+      requestRef.current = 0;
+      setError({
+        type: "context",
+        message: "Graphics context lost — waiting for restore…",
+      });
+    };
+
+    const handleContextRestored = () => {
+      // Tear down the stale renderer so initialize()'s
+      // `rendererRef.current` guard doesn't skip re-creation.
+      teardown();
+      setError(null);
+      initialize();
+    };
+
+    canvas.addEventListener("webglcontextlost", handleContextLost);
+    canvas.addEventListener("webglcontextrestored", handleContextRestored);
+
+    return () => {
+      canvas.removeEventListener("webglcontextlost", handleContextLost);
+      canvas.removeEventListener("webglcontextrestored", handleContextRestored);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    // Coalesce resize bursts (drag-to-resize, mobile rotate, DPR zoom)
+    // into a single backing-store realloc per frame. Without this,
+    // every resize event reallocates bloom/TAA FBOs synchronously.
+    let resizeRaf = 0;
     const handleResize = () => {
-      const canvas = canvasRef.current;
-      if (canvas) {
-        const dpr = Math.min(window.devicePixelRatio || 1, 2.0);
-        const newWidth = window.innerWidth * dpr;
-        const newHeight = window.innerHeight * dpr;
+      if (resizeRaf) return;
+      resizeRaf = requestAnimationFrame(() => {
+        resizeRaf = 0;
+        const canvas = canvasRef.current;
+        if (!canvas) return;
+        const isCoarse =
+          typeof window.matchMedia !== "undefined" &&
+          window.matchMedia("(pointer: coarse)").matches;
+        const dprCap = isCoarse ? 1.0 : 1.5;
+        const dpr = Math.min(window.devicePixelRatio || 1, dprCap);
+        const newWidth = Math.floor(window.innerWidth * dpr);
+        const newHeight = Math.floor(window.innerHeight * dpr);
 
         if (canvas.width !== newWidth || canvas.height !== newHeight) {
           canvas.width = newWidth;
@@ -136,13 +227,16 @@ export const WebGLCanvas = ({
           if (rendererRef.current)
             rendererRef.current.resize(newWidth, newHeight);
         }
-      }
+      });
     };
 
     window.addEventListener("resize", handleResize);
     handleResize();
 
-    return () => window.removeEventListener("resize", handleResize);
+    return () => {
+      window.removeEventListener("resize", handleResize);
+      if (resizeRaf) cancelAnimationFrame(resizeRaf);
+    };
   }, []);
 
   useEffect(() => {
@@ -200,15 +294,23 @@ export const WebGLCanvas = ({
                     {error.type === "program" && "Link Error"}
                     {error.type === "memory" && "GPU Memory Error"}
                   </h2>
-                  <button
-                    onClick={() => {
-                      const text = `${error.message}\n\n${error.details || ""}`;
-                      navigator.clipboard.writeText(text);
-                    }}
-                    className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded border border-white/10 text-white transition-colors"
-                  >
-                    Copy Full Error
-                  </button>
+                  <div className="flex gap-2 flex-shrink-0">
+                    <button
+                      onClick={handleRetry}
+                      className="text-[10px] bg-red-500/20 hover:bg-red-500/30 px-2 py-1 rounded border border-red-500/30 text-white transition-colors"
+                    >
+                      Retry
+                    </button>
+                    <button
+                      onClick={() => {
+                        const text = `${error.message}\n\n${error.details || ""}`;
+                        navigator.clipboard.writeText(text);
+                      }}
+                      className="text-[10px] bg-white/10 hover:bg-white/20 px-2 py-1 rounded border border-white/10 text-white transition-colors"
+                    >
+                      Copy Full Error
+                    </button>
+                  </div>
                 </div>
                 <p className="text-sm text-gray-300 mb-3">{error.message}</p>
                 {error.details && (

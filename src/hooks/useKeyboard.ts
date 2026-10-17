@@ -1,7 +1,7 @@
 import { useEffect, useCallback } from "react";
 import type { SimulationParams } from "@/types/simulation";
 import type { PresetName } from "@/types/features";
-import { SIMULATION_CONFIG } from "@/configs/simulation.config";
+import { SIMULATION_CONFIG } from "@/config/simulation.config";
 
 /**
  * Keyboard controls for the black hole simulation.

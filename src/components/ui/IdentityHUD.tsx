@@ -1,15 +1,17 @@
 import Image from "next/image";
 import { motion } from "framer-motion";
+import { memo } from "react";
 
 interface IdentityHUDProps {
   isCinematic?: boolean;
   cinematicMode?: "orbit" | "dive" | "viewpoint" | "viewpoints-tour" | null;
 }
 
-export const IdentityHUD = ({
+// Memoized: primitive props only; skips the ~10Hz idle App renders.
+export const IdentityHUD = memo(function IdentityHUD({
   isCinematic,
   cinematicMode,
-}: IdentityHUDProps) => {
+}: IdentityHUDProps) {
   // Determine status text and color based on mode
   const isCinematicActive = isCinematic && cinematicMode !== null;
   const statusDotColor = isCinematicActive
@@ -86,4 +88,4 @@ export const IdentityHUD = ({
       </div>
     </div>
   );
-};
+});

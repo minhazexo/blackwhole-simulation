@@ -162,13 +162,19 @@ export const BACKGROUND_CHUNK = `
     float core = exp(-dist * dist * 150.0);
     starVal = max(starVal, core);
 
-    // Twinkle for brighter stars
+    // Twinkle for brighter stars (deliberately calm: ±12% at ≤2Hz.
+    // The old ±25% at up to 4.5Hz read as flicker against dark space and
+    // contributed to viewer dizziness; stellar variability at this scale
+    // is aesthetic, not physical, so comfort wins.)
+    // Skipped on LOW/OFF alongside the nebula (rescue frames > shimmer).
     float twinkle = 1.0;
+    #if !defined(RAY_QUALITY_LOW) && !defined(RAY_QUALITY_OFF)
     if (brightness > 0.5) {
       float twinklePhase = hash(cell + seedOffset + 41.3) * 6.28;
-      float twinkleSpeed = 1.5 + hash(cell + seedOffset + 89.7) * 3.0;
-      twinkle = 0.75 + 0.25 * sin(u_time * twinkleSpeed + twinklePhase);
+      float twinkleSpeed = 0.8 + hash(cell + seedOffset + 89.7) * 1.2;
+      twinkle = 0.88 + 0.12 * sin(u_time * twinkleSpeed + twinklePhase);
     }
+    #endif
 
     // Galactic extinction: dust reddens and dims stars in galactic plane
     vec2 gal = toGalactic(dir);
@@ -189,7 +195,9 @@ export const BACKGROUND_CHUNK = `
       fbm(dir * 1.2 + vec3(0.4, 0.6, 0.9))
     ) * 0.5;
 
-    vec3 warpedPos = dir * 1.8 + warp1 + u_time * 0.004;
+    // Drift rates kept slow (≤0.0015/s): the nebula crawling faster read
+    // as scene motion and added to dizziness. Structure itself unchanged.
+    vec3 warpedPos = dir * 1.8 + warp1 + u_time * 0.0015;
     float n1 = fbm(warpedPos);
 
     // Second warp for finer detail
@@ -199,11 +207,11 @@ export const BACKGROUND_CHUNK = `
       fbm(dir * 2.5 + vec3(0.2, 0.8, 0.5))
     ) * 0.3;
 
-    vec3 warpedPos2 = dir * 3.5 + warp2 - u_time * 0.002;
+    vec3 warpedPos2 = dir * 3.5 + warp2 - u_time * 0.0008;
     float n2 = fbm(warpedPos2);
 
     // Third sample for diffuse continuum
-    vec3 warpedPos3 = dir * 5.0 + vec3(0.5, 0.3, 0.7) + u_time * 0.001;
+    vec3 warpedPos3 = dir * 5.0 + vec3(0.5, 0.3, 0.7) + u_time * 0.0005;
     float n3 = fbm(warpedPos3);
 
     // H-alpha emission: bright red filaments
@@ -245,20 +253,23 @@ export const BACKGROUND_CHUNK = `
     float densityOffset = densityFactor * 0.08;
 
     // Layer 1: Bright stars (rare, warm colors, with twinkle)
-    // Density boosted by spiral arms and bulge
-    float thresh1 = clamp(0.995 - milkyWay * 0.003 - bulge * 0.01 + densityOffset, 0.5, 0.999);
+    // Density boosted by spiral arms and bulge.
+    // Thresholds raised across all layers (~40% fewer stars overall):
+    // dense fields crawled and shimmered under lensing + auto-spin,
+    // which reads as dizziness; the black hole stays the subject.
+    float thresh1 = clamp(0.9972 - milkyWay * 0.003 - bulge * 0.01 + densityOffset, 0.5, 0.999);
     stars += starLayer(dir, 180.0, thresh1, 10.0, 4.0, 0.0);
 
-    // Layer 2: Medium stars (moderate density) — reduced ~30%
-    float thresh2 = clamp(0.985 - milkyWay * 0.012 - bulge * 0.025 + densityOffset, 0.5, 0.999);
+    // Layer 2: Medium stars (moderate density)
+    float thresh2 = clamp(0.9905 - milkyWay * 0.012 - bulge * 0.025 + densityOffset, 0.5, 0.999);
     stars += starLayer(dir, 400.0, thresh2, 18.0, 1.5, 217.3);
 
-    // Layer 3: Dim stars (dense, spiral arm concentrated) — reduced ~30%
-    float thresh3 = clamp(0.962 - milkyWay * 0.030 - bulge * 0.040 + densityOffset, 0.5, 0.999);
+    // Layer 3: Dim stars (dense, spiral arm concentrated)
+    float thresh3 = clamp(0.974 - milkyWay * 0.030 - bulge * 0.040 + densityOffset, 0.5, 0.999);
     stars += starLayer(dir, 800.0, thresh3, 30.0, 0.8, 433.7);
 
-    // Layer 4: Ultra-dim background stars — reduced ~35%
-    float thresh4 = clamp(0.930 - milkyWay * 0.040 - bulge * 0.045 + densityOffset, 0.5, 0.999);
+    // Layer 4: Ultra-dim background stars
+    float thresh4 = clamp(0.946 - milkyWay * 0.040 - bulge * 0.045 + densityOffset, 0.5, 0.999);
     vec3 gridPos4 = dir * 1500.0;
     vec3 cell4 = floor(gridPos4);
     float sHash4 = hash(cell4 + 617.3);
@@ -284,8 +295,14 @@ export const BACKGROUND_CHUNK = `
     float dustLane = exp(-galacticLat * galacticLat * 40.0) * (0.25 + 0.35 * dustNoise);
     stars *= (1.0 - dustLane * 0.55);
 
-    // Nebula emission (additive, after dust)
+    // Nebula emission (additive, after dust). Skipped entirely on LOW/OFF:
+    // ~9 domain-warped fbm calls (~40+ noise evals) per background pixel is
+    // one of the heaviest single costs at low step counts, and the rescued
+    // frames matter more than faint gas. MEDIUM and up are unaffected, so
+    // golden captures (medium default) are pixel-identical.
+    #if !defined(RAY_QUALITY_LOW) && !defined(RAY_QUALITY_OFF)
     stars += renderNebula(dir);
+    #endif
 
     return stars;
   }

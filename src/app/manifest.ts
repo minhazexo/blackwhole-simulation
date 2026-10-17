@@ -33,15 +33,13 @@ export default function manifest(): MetadataRoute.Manifest {
         src: "/opengraph-image.jpg",
         sizes: "1200x630",
         type: "image/jpeg",
-        // @ts-expect-error - Next.js types might not support form_factor yet
         form_factor: "wide",
         label: "Interactive Black Hole Simulation",
       },
       {
-        src: "/twitter-image.jpg",
+        src: "/opengraph-image.jpg",
         sizes: "1200x630",
         type: "image/jpeg",
-        // @ts-expect-error - Next.js types might not support form_factor yet
         form_factor: "wide",
         label: "Real-time Kerr Metric Visualization",
       },

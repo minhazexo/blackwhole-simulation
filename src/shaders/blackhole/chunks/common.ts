@@ -1,4 +1,4 @@
-import { PHYSICS_CONSTANTS } from "@/configs/physics.config";
+import { PHYSICS_CONSTANTS } from "@/config/physics.config";
 
 export const COMMON_CHUNK = `
   precision highp float;

@@ -148,7 +148,10 @@ export class ShaderManager {
       compilationTimeMs: performance.now() - start,
     };
 
-    this.variantCache.set(this.generateCacheKey(features), variant);
+    // Store under the SAME key the lookup above uses (it includes hasPost).
+    // Storing under generateCacheKey(features) meant the cache never hit:
+    // every feature toggle recompiled a program and leaked the previous one.
+    this.variantCache.set(this.generateCacheKey(featWithPost), variant);
     return variant;
   }
 

@@ -7,7 +7,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import * as fc from "fast-check";
 import { SettingsStorage } from "@/storage/settings";
 import type { FeatureToggles } from "@/types/features";
-import { DEFAULT_FEATURES } from "@/types/features";
+import { DEFAULT_FEATURES } from "@/config/feature-flags";
 
 /**
  * Mock localStorage for testing

@@ -5,12 +5,8 @@
  */
 
 import { useCallback } from "react";
-import {
-  getPreset,
-  matchesPreset,
-  type PresetName,
-  type FeatureToggles,
-} from "@/types/features";
+import type { PresetName, FeatureToggles } from "@/types/features";
+import { getPreset, matchesPreset } from "@/config/feature-flags";
 import type { SimulationParams } from "@/types/simulation";
 
 interface UsePresetsReturn {

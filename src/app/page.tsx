@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import dynamic from "next/dynamic";
 import { motion, AnimatePresence } from "framer-motion";
 import { ChevronUp, Compass } from "lucide-react";
@@ -67,57 +67,127 @@ import { useBenchmark } from "@/hooks/useBenchmark";
 import { useKeyboard } from "@/hooks/useKeyboard";
 import { useUrlState } from "@/hooks/useUrlState";
 
-import { useAdaptiveResolution } from "@/hooks/useAdaptiveResolution";
 import { useMobileOptimization } from "@/hooks/useMobileOptimization";
 import { usePresets } from "@/hooks/usePresets";
 import { type SimulationParams, DEFAULT_PARAMS } from "@/types/simulation";
 import type { PerformanceMetrics } from "@/performance/monitor";
 import type { DebugMetrics } from "@/components/ui/DebugOverlay";
-import { getPreset, type PresetName } from "@/types/features";
+import { DEFAULT_PRESET_MODE } from "@/config/simulation.config";
+import { getPreset } from "@/config/feature-flags";
+import type { RayTracingQuality } from "@/types/features";
 import { settingsStorage } from "@/storage/settings";
 import { useWebGPUSupport } from "@/hooks/useWebGPUSupport";
 import { useSystemProfile } from "@/hooks/useSystemProfile";
 import { useAudio } from "@/hooks/useAudio";
-import { SystemProfileScreen } from "@/components/ui/SystemProfileScreen";
+import { SOLAR_MASS } from "@/physics/constants";
 import { WasmLoadingOverlay } from "@/components/ui/WasmLoadingOverlay";
-import { PhysicsGuide } from "@/components/seo/PhysicsGuide";
+import { PhysicsGuide } from "@/seo/PhysicsGuide";
+
+/**
+ * Module-level once-guard for auto-calibration. The per-mount
+ * profileAppliedRef is NOT enough: dev StrictMode unmounts/remounts the
+ * whole tree (fresh refs), and each mount's probe can resolve with a
+ * DIFFERENT preset (machine load varies during boot) — applying twice =
+ * two recompiles + visible quality pops seconds apart. Module state
+ * survives remounts (HMR/about:blank resets it, which is correct: a fresh
+ * evaluation context deserves a fresh calibration).
+ */
+let autoCalibrationApplied = false;
 
 const App = () => {
   // ── System Profile (Root-level loading gate) ──
   // Runs hardware detection, stress test, and preset recommendation
   // before the main canvas mounts.
-  const { profile, stageInfo, isReady: profileReady } = useSystemProfile();
+  const { profile, isReady: profileReady } = useSystemProfile();
 
   const { isMobile } = useMobileOptimization();
   const { applyPreset } = usePresets();
   const { isSupported: isWebGPUSupported } = useWebGPUSupport();
   const hardwareSupport = useHardwareSupport();
 
+  // If WebGL is software-only, prefer WebGPU if available.
+  // Software WebGL (llvmpipe/SwiftShader) runs at ~10-15 FPS for ray marching.
+  const effectiveWebGPU = hardwareSupport.isSoftwareWebGL
+    ? (isWebGPUSupported ?? false)
+    : (isWebGPUSupported ?? false);
+
   const [params, setParams] = useState<SimulationParams>(() => {
-    // Start with conservative defaults until the system profile
-    // completes and recommends the optimal preset.
-    const balancedFeatures = getPreset("balanced");
+    // Start from the project default preset (high-quality / photo-1) so the
+    // first paint already shows the target fidelity instead of opening at
+    // medium and popping up/down seconds later when calibration lands.
+    const defaultFeatures = getPreset(DEFAULT_PRESET_MODE);
     return {
       ...DEFAULT_PARAMS,
-      quality: balancedFeatures.rayTracingQuality,
-      features: balancedFeatures,
-      performancePreset: "balanced",
+      quality: defaultFeatures.rayTracingQuality,
+      features: defaultFeatures,
+      performancePreset: DEFAULT_PRESET_MODE,
       adaptiveResolution: true,
     };
   });
 
-  // When the system profile completes, apply the recommended preset.
-  // This overwrites the conservative defaults above.
+  // Pristine fingerprint: the exact defaults object identities from the
+  // initial state above. Calibration may only land on params that NOBODY
+  // moved: any quality-affecting change (hash preset, manual pick,
+  // governor rung) replaces the features object or preset label, which
+  // permanently disqualifies the auto-apply below. Zoom/slider tweaks
+  // spread {...prev} and preserve these references, so they don't block.
+  const pristineFeaturesRef = useRef(params.features);
+  const PRISTINE_PRESET = DEFAULT_PRESET_MODE;
+
+  // Explicit user intent wins over auto-calibration. Set by any manual
+  // ControlPanel change (sliders/presets/quality) and by a preset arriving
+  // via shared-link hash — in both cases the profile recommendation must
+  // NOT clobber the choice seconds later ("presets changing by themselves").
+  const userTouchedRef = useRef(false);
+  const profileAppliedRef = useRef(false);
+
+  // Phase 7: URL hash state. Called here (before the profile effect below)
+  // so hasPresetInHash is settled when calibration completes.
+  const { hasPresetInHash } = useUrlState(params, setParams);
+
+  // Manual-change marker: every ControlPanel write flows through this,
+  // distinguishing explicit user choice from system updates (governor,
+  // calibration, camera) for the guard above. Accepts values and updaters
+  // like the underlying setter (ControlPanel passes values).
+  const handleManualParamsChange = useCallback(
+    (
+      action:
+        | SimulationParams
+        | ((prev: SimulationParams) => SimulationParams),
+    ) => {
+      userTouchedRef.current = true;
+      setParams(action);
+    },
+    [],
+  );
+
+  // When the system profile completes, apply the recommended preset —
+  // globally ONCE (module guard survives StrictMode remounts), and only
+  // onto pristine defaults: an explicit hash preset, any manual touch, or
+  // any quality-affecting change (governor rung included) disqualifies.
   useEffect(() => {
-    if (profileReady && profile.recommendedFeatures) {
-      setParams((prev) => ({
-        ...prev,
-        quality: profile.recommendedFeatures.rayTracingQuality,
-        features: profile.recommendedFeatures,
-        performancePreset: profile.recommendedPreset,
-      }));
+    if (profileReady && !profileAppliedRef.current && profile.recommendedFeatures) {
+      profileAppliedRef.current = true;
+      if (autoCalibrationApplied) return;
+      autoCalibrationApplied = true;
+      const pristine =
+        !hasPresetInHash &&
+        !userTouchedRef.current &&
+        params.performancePreset === PRISTINE_PRESET &&
+        params.features === pristineFeaturesRef.current;
+      if (pristine) {
+        setParams((prev) => ({
+          ...prev,
+          quality: profile.recommendedFeatures.rayTracingQuality,
+          features: profile.recommendedFeatures,
+          performancePreset: profile.recommendedPreset,
+        }));
+      }
     }
-  }, [profileReady, profile.recommendedPreset, profile.recommendedFeatures]);
+    // Params read intentionally (fingerprint); re-running on every param
+    // change would defeat the once-guard. Guard flags make this safe.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileReady, profile.recommendedPreset, profile.recommendedFeatures, hasPresetInHash]);
 
   const [showUI, setShowUI] = useState(true);
   const [metrics, setMetrics] = useState<PerformanceMetrics | undefined>(
@@ -129,6 +199,9 @@ const App = () => {
   // WASM compilation loading state. Starts true, flips to false when
   // physicsBridge.isReady() confirms the worker + WASM are operational.
   const [physicsReady, setPhysicsReady] = useState(false);
+  // Visible (dismissible) degraded-mode error. Set on init failure or when
+  // the bridge reports a stalled/degraded worker; cleared on dismiss.
+  const [physicsError, setPhysicsError] = useState<string | null>(null);
 
   // Phase 5: Extracted benchmark logic into dedicated hook
   const {
@@ -143,12 +216,58 @@ const App = () => {
     applyRecommendedPreset,
   } = useBenchmark(params, setParams, metrics, applyPreset);
 
-  useAdaptiveResolution(metrics?.currentFPS || 60, {
-    enabled: params.adaptiveResolution,
-    onResolutionChange: (scale) => {
-      setParams((prev) => ({ ...prev, renderScale: scale }));
-    },
-  });
+  // Stable metrics handler: skip React re-render when the incoming
+  // metrics are visually identical (same rounded FPS / quality /
+  // resolution). The renderer pushes at 2Hz; without this guard every
+  // push reconciles the entire App tree even when nothing changed.
+  const handleMetricsUpdate = useCallback((next: PerformanceMetrics) => {
+    setMetrics((prev) => {
+      if (
+        prev &&
+        prev.currentFPS === next.currentFPS &&
+        prev.rollingAverageFPS === next.rollingAverageFPS &&
+        prev.quality === next.quality &&
+        Math.abs(prev.renderResolution - next.renderResolution) < 0.001
+      ) {
+        return prev;
+      }
+      return next;
+    });
+  }, []);
+
+  // Runtime quality-governor signal from the renderer (fires ≤0.4Hz).
+  // Changes ONLY the ray-tracing rung and deliberately preserves the
+  // performancePreset label: flipping the preset badge on every auto-tune
+  // reads as "presets changing by themselves". The Quality buttons +
+  // Telemetry still show the true active rung.
+  const handleQualityGovernor = useCallback((q: RayTracingQuality) => {
+    setParams((prev) => {
+      if (prev.features?.rayTracingQuality === q) return prev;
+      const base =
+        prev.features ?? getPreset(prev.performancePreset ?? "balanced");
+      return { ...prev, features: { ...base, rayTracingQuality: q } };
+    });
+  }, []);
+
+  // Reduced-blur mode with hysteresis: backdrop-blur re-rasterizes the
+  // fullscreen canvas backdrop every frame, which alone can cost 10-20fps
+  // on integrated/mobile GPUs. Enter below 40fps rolling average, exit
+  // above 48fps (hysteresis prevents flapping at the boundary). Mobile is
+  // always degraded: blur(20-50px) glass over a ray-marched canvas is the
+  // single biggest mobile GPU cost outside the shader itself.
+  // Initialized false to match SSR (isMobile reads navigator/window, which
+  // don't exist server-side). The effect below converges to the true value
+  // immediately after hydration — one frame of full blur at most.
+  const [perfDegraded, setPerfDegraded] = useState(false);
+  useEffect(() => {
+    const avg = metrics?.rollingAverageFPS ?? 0;
+    setPerfDegraded((prev) => {
+      if (isMobile) return true;
+      if (!prev && avg > 0 && avg < 40) return true;
+      if (prev && avg > 48) return false;
+      return prev;
+    });
+  }, [metrics?.rollingAverageFPS, isMobile]);
 
   useEffect(() => {
     if (params.features) {
@@ -192,7 +311,7 @@ const App = () => {
   // Stellar-mass default for the readout: 10 M_sun gives T_H ≈ 6e-9 K
   // and a plot peak in the radio band, which makes the operator's
   // "quantum effects" overlay visually meaningful at any spin.
-  const QUANTUM_DEMO_MASS_KG = 10 * 1.98847e30;
+  const QUANTUM_DEMO_MASS_KG = 10 * SOLAR_MASS;
 
   // Phase 7: Keyboard shortcuts for accessibility
   useKeyboard({
@@ -203,9 +322,6 @@ const App = () => {
     toggleDebug,
     stopCinematic,
   });
-
-  // Phase 7: URL hash state for shareable simulation links
-  useUrlState(params, setParams);
 
   // Phase 6: WebGPU Support Hook
   const [useWebGPU, setUseWebGPU] = useState(false);
@@ -220,23 +336,32 @@ const App = () => {
         setForceShowCompat(true);
       }
 
-      if (requested && isWebGPUSupported !== false) {
+      // If WebGL is software-only (CPU rendering), prefer WebGPU if available.
+      // Software WebGL (llvmpipe/SwiftShader) runs at ~10-15 FPS for ray marching.
+      const effectiveWebGPU = hardwareSupport.isSoftwareWebGL
+        ? (isWebGPUSupported ?? false)
+        : (isWebGPUSupported ?? false);
+
+      if (requested && effectiveWebGPU) {
+        setUseWebGPU(true);
+      } else if (hardwareSupport.isSoftwareWebGL && effectiveWebGPU) {
+        // Auto-enable WebGPU when software WebGL is detected
         setUseWebGPU(true);
       } else {
         setUseWebGPU(false);
       }
     }
-  }, [isWebGPUSupported]);
+  }, [isWebGPUSupported, hardwareSupport.isSoftwareWebGL]);
 
   // SELF-HEALING: If hardware IS supported, force-hide the HUD and clean URL
   useEffect(() => {
-    if (hardwareSupport.webgl && forceShowCompat) {
+    if (hardwareSupport.webgl && !hardwareSupport.isSoftwareWebGL && forceShowCompat) {
       setForceShowCompat(false);
       const url = new URL(window.location.href);
       url.searchParams.delete("debug_hud");
       window.history.replaceState({}, "", url.toString());
     }
-  }, [hardwareSupport.webgl, forceShowCompat]);
+  }, [hardwareSupport.webgl, hardwareSupport.isSoftwareWebGL, forceShowCompat]);
 
   useEffect(() => {
     // Trigger Physics Bridge Initialization
@@ -247,8 +372,23 @@ const App = () => {
       // eslint-disable-next-line no-console
       console.error("Critical Physics Initialization Failure:", err);
       // Dismiss loading overlay on failure so the user sees the canvas
-      // (which falls back to Schwarzschild approximations).
+      // (which falls back to Schwarzschild approximations), but surface a
+      // dismissible degraded-mode banner with the failure reason.
+      setPhysicsError(String(err?.message || err));
       setPhysicsReady(true);
+    });
+
+    // Subscribe to bridge status: a stalled worker flips to "degraded".
+    // Keep the canvas visible (physicsReady stays true) and show the banner.
+    const unsubscribeStatus = physicsBridge.onStatusChange((status: string) => {
+      if (status === "degraded") {
+        const detail = physicsBridge.getLastWorkerError();
+        setPhysicsError(
+          detail
+            ? `Physics worker stalled — ${detail}`
+            : "Physics worker stalled — telemetry frozen; retry to restart",
+        );
+      }
     });
 
     // Safety timeout: dismiss loading overlay after 15s even if WASM
@@ -274,6 +414,7 @@ const App = () => {
       clearInterval(pollInterval);
       clearTimeout(safetyTimeout);
       detachVisibility();
+      unsubscribeStatus();
     };
   }, [isWebGPUSupported]);
 
@@ -286,15 +427,59 @@ const App = () => {
     handleInteraction: handleAudioInteraction,
   } = useAudio();
 
+  // Stable callbacks for memoized overlays (inline closures would defeat
+  // their memo on every App render).
+  const handleWasmDismiss = useCallback(async () => {
+    // Retry: restart the worker, then clear the banner on success.
+    // On failure keep the banner (status already flips to "failed").
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { physicsBridge } = require("@/engine/physics-bridge");
+      await physicsBridge.restartWorker();
+      setPhysicsError(null);
+    } catch {
+      // Keep banner visible; bridge status is already "failed".
+    }
+  }, []);
+  const handleBenchmarkClose = useCallback(
+    () => setShowBenchmarkResults(false),
+    [setShowBenchmarkResults],
+  );
+  // Stable DebugOverlay metrics object (was rebuilt inline every render,
+  // defeating memoization downstream).
+  const debugMetrics = useMemo<DebugMetrics>(
+    () =>
+      metrics
+        ? {
+            ...metrics,
+            totalFrameTimeMs: metrics.frameTimeMs,
+          }
+        : {
+            totalFrameTimeMs: 0,
+            frameTimeMs: 0,
+            currentFPS: 0,
+            rollingAverageFPS: 0,
+            quality: "medium",
+            renderResolution: 1,
+          },
+    [metrics],
+  );
+
   return (
     <div
       className="relative w-full h-screen bg-black overflow-hidden select-none font-sans text-white"
+      data-perf-degraded={perfDegraded ? "true" : "false"}
       onClick={handleAudioInteraction}
       onTouchStart={handleAudioInteraction}
     >
       {/* WASM compilation loading overlay. Hides once the physics bridge
-          acknowledges the worker + Rust kernel are operational. */}
-      <WasmLoadingOverlay visible={!physicsReady} />
+          acknowledges the worker + Rust kernel are operational. Shows a
+          dismissible degraded-mode banner when physicsError is set. */}
+      <WasmLoadingOverlay
+        visible={!physicsReady || physicsError !== null}
+        error={physicsError}
+        onDismiss={handleWasmDismiss}
+      />
 
       {(forceShowCompat ||
         (hardwareSupport.isReady && !hardwareSupport.webgl)) && (
@@ -302,7 +487,14 @@ const App = () => {
       )}
 
       <ErrorBoundary>
-        {params.features?.spacetimeVisualization ? (
+        {/* Wait for hardware detection before mounting any canvas: otherwise
+            WebGL mounts immediately and is torn down seconds later when
+            detection resolves (WebGPU switch, software fallback) — a full
+            recompile + black flash right at startup. The WASM loading
+            overlay already covers the screen meanwhile, so this is free. */}
+        {!hardwareSupport.isReady ? (
+          <div className="absolute inset-0 z-0 bg-black" />
+        ) : params.features?.spacetimeVisualization ? (
           <SpacetimeCanvas
             mass={params.mass}
             spin={params.spin}
@@ -319,7 +511,7 @@ const App = () => {
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
-            onMetricsUpdate={setMetrics}
+            onMetricsUpdate={handleMetricsUpdate}
           />
         ) : (
           <WebGLCanvas
@@ -332,7 +524,8 @@ const App = () => {
             onTouchStart={handleTouchStart}
             onTouchMove={handleTouchMove}
             onTouchEnd={handleTouchEnd}
-            onMetricsUpdate={setMetrics}
+            onMetricsUpdate={handleMetricsUpdate}
+            onQualityChange={handleQualityGovernor}
           />
         )}
 
@@ -401,7 +594,7 @@ const App = () => {
 
         <ControlPanel
           params={params}
-          onParamsChange={setParams}
+          onParamsChange={handleManualParamsChange}
           showUI={showUI && !isInfoExpanded}
           onToggleUI={setShowUI}
           isCompact={isCompact}
@@ -432,6 +625,7 @@ const App = () => {
 
         {physicsReady && showUI && !isCinematic && isCompact && (
           <motion.div
+            id="cinematic"
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.8, delay: 1.5, ease: "easeOut" }}
@@ -495,7 +689,7 @@ const App = () => {
         {showBenchmarkResults && benchmarkReport && (
           <BenchmarkResults
             report={benchmarkReport}
-            onClose={() => setShowBenchmarkResults(false)}
+            onClose={handleBenchmarkClose}
             onApplyRecommended={applyRecommendedPreset}
           />
         )}
@@ -504,19 +698,7 @@ const App = () => {
         <DebugOverlay
           enabled={showDebug}
           onToggle={setShowDebug}
-          metrics={
-            metrics
-              ? ({
-                  ...metrics,
-                  totalFrameTimeMs: metrics.frameTimeMs,
-                } as DebugMetrics)
-              : ({
-                  totalFrameTimeMs: 0,
-                  currentFPS: 0,
-                  rollingAverageFPS: 0,
-                  renderResolution: 1,
-                } as DebugMetrics)
-          }
+          metrics={debugMetrics}
           backend={useWebGPU ? "WebGPU" : "WebGL (CPU)"}
         />
       </ErrorBoundary>

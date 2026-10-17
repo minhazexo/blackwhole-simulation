@@ -39,7 +39,10 @@ cd ../..
 
 # 6. Run the Next.js build
 echo "Running Next.js build..."
-next build
+# Pin webpack: the Rust/WASM worker bridge relies on next.config.mjs
+# asyncWebAssembly experiments, which Turbopack does not apply.
+# (Turbopack migration is a tracked future spike, not this upgrade.)
+next build --webpack
 
 # 7. IndexNow ping (Bing + Yandex). Logs only, never fails the deploy.
 # Note: on first deploy after this PR, the live sitemap.xml may still reflect

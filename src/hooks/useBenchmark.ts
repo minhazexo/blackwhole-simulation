@@ -4,7 +4,7 @@ import type { BenchmarkReport } from "@/performance/benchmark";
 import type { PerformanceMetrics } from "@/performance/monitor";
 import type { SimulationParams } from "@/types/simulation";
 import type { FeatureToggles, PresetName } from "@/types/features";
-import { DEFAULT_FEATURES } from "@/types/features";
+import { DEFAULT_FEATURES } from "@/config/feature-flags";
 
 /**
  * Encapsulates all benchmark state and logic.

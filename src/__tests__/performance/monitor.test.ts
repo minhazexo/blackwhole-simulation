@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from "vitest";
 import * as fc from "fast-check";
 import { PerformanceMonitor } from "@/performance/monitor";
-import { PERFORMANCE_CONFIG } from "@/configs/performance.config";
+import { PERFORMANCE_CONFIG } from "@/config/performance.config";
 
 /**
  * Feature: performance-optimization, Property 8: Rolling average FPS calculation

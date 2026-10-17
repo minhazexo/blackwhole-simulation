@@ -1,4 +1,4 @@
-import { PHYSICS_CONSTANTS } from "@/configs/physics.config";
+import { PHYSICS_CONSTANTS } from "@/config/physics.config";
 import { COMMON_CHUNK } from "./chunks/common";
 import { METRIC_CHUNK } from "./chunks/metric";
 import { NOISE_CHUNK } from "./chunks/noise";

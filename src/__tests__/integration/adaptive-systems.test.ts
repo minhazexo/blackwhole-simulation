@@ -17,7 +17,6 @@ import { AdaptiveResolutionController } from "@/rendering/adaptive-resolution";
 import { SettingsStorage } from "@/storage/settings";
 import {
   isMobileDevice,
-  getMobileRayStepCap,
   getHardwareInfo,
 } from "@/utils/device-detection";
 import {
@@ -25,7 +24,7 @@ import {
   type BenchmarkReport,
 } from "@/performance/benchmark";
 import type { FeatureToggles, PresetName } from "@/types/features";
-import { getPreset, DEFAULT_FEATURES } from "@/types/features";
+import { getPreset, DEFAULT_FEATURES, getMaxRaySteps } from "@/config/feature-flags";
 
 // Mock localStorage for Node.js environment
 const localStorageMock = (() => {
@@ -432,22 +431,13 @@ describe("Adaptive Systems - Integration Tests", () => {
     });
 
     it("should apply mobile ray step cap correctly", () => {
-      // Requirement 16.3: Mobile devices capped at 100 ray steps
-      const requestedSteps = 300;
-
-      const mobileSteps = getMobileRayStepCap(requestedSteps, true);
-      const desktopSteps = getMobileRayStepCap(requestedSteps, false);
-
-      expect(mobileSteps).toBe(100);
-      expect(desktopSteps).toBe(300);
+      // Requirement 16.3: Mobile devices capped at 80 ray steps (canonical maxStepsMobile)
+      expect(getMaxRaySteps("ultra", true)).toBe(80);
+      expect(getMaxRaySteps("ultra", false)).toBe(256);
     });
 
-    it("should not cap ray steps below 100 on mobile", () => {
-      const requestedSteps = 50;
-
-      const mobileSteps = getMobileRayStepCap(requestedSteps, true);
-
-      expect(mobileSteps).toBe(50);
+    it("should not cap ray steps below 80 on mobile", () => {
+      expect(getMaxRaySteps("low", true)).toBe(32);
     });
 
     it("should apply correct mobile configuration", () => {
@@ -807,9 +797,9 @@ describe("Adaptive Systems - Integration Tests", () => {
 
       for (const fps of mobileFPS) {
         const frameTime = 1000 / fps;
-        // Apply mobile ray step cap
-        const cappedSteps = getMobileRayStepCap(300, true);
-        expect(cappedSteps).toBe(100);
+        // Apply mobile ray step cap (canonical maxStepsMobile = 80)
+        const cappedSteps = getMaxRaySteps("ultra", true);
+        expect(cappedSteps).toBe(80);
 
         // Simulate 5 seconds - need to advance time by 5000ms total
         // Add a bit extra to ensure we cross the threshold
