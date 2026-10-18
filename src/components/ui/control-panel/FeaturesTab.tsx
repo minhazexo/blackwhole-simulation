@@ -8,7 +8,7 @@ import {
   Layers,
   Camera,
 } from "lucide-react";
-import { VIEWPOINTS } from "@/config/viewpoints.config";
+import { TOUR_DWELL_SECONDS, VIEWPOINTS } from "@/config/viewpoints.config";
 import type { FeatureToggles } from "@/types/features";
 import { SectionHeader, type FeaturesTabProps } from "./controls";
 
@@ -138,14 +138,8 @@ export const FeaturesTab = ({
           ].map((f) =>
             renderToggle({
               label: f.label,
-              isActive:
-                !!params.features?.[
-                  f.key as keyof FeatureToggles
-                ],
-              onClick: () =>
-                toggleFeature(
-                  f.key as keyof FeatureToggles,
-                ),
+              isActive: !!params.features?.[f.key as keyof FeatureToggles],
+              onClick: () => toggleFeature(f.key as keyof FeatureToggles),
               icon: f.icon,
               key: f.key,
             }),
@@ -179,12 +173,8 @@ export const FeaturesTab = ({
           <SectionHeader label="Viewpoint Tour" />
           <div className="flex flex-col gap-3">
             <button
-              onClick={() =>
-                onStartAllViewpointsTour?.()
-              }
-              disabled={
-                cinematicMode === "viewpoints-tour"
-              }
+              onClick={() => onStartAllViewpointsTour?.()}
+              disabled={cinematicMode === "viewpoints-tour"}
               className={`w-full py-2.5 px-4 rounded-xl border transition-all active:scale-[0.98] flex items-center justify-center gap-2 ${
                 cinematicMode === "viewpoints-tour"
                   ? "bg-white/15 text-white border-white/30 shadow-[0_0_12px_rgba(255,255,255,0.1)]"
@@ -218,9 +208,10 @@ export const FeaturesTab = ({
                 </div>
               )}
 
-            <p className="text-[6.5px] text-white/20 uppercase tracking-[0.15em] leading-relaxed">
-              Automatically visits every pre-defined
-              viewpoint, dwelling for 10 seconds each.
+            <p className="text-[7px] text-white/25 uppercase tracking-[0.15em] leading-relaxed">
+              Visits all {VIEWPOINTS.length} viewpoints in order, dwelling{" "}
+              {TOUR_DWELL_SECONDS}s each. Use [ ] to change scene, Space to
+              hold, Esc to exit.
             </p>
           </div>
         </div>
@@ -237,9 +228,7 @@ export const FeaturesTab = ({
               return (
                 <button
                   key={vp.id}
-                  onClick={() =>
-                    onStartViewpoint?.(vp.id)
-                  }
+                  onClick={() => onStartViewpoint?.(vp.id)}
                   className={`group relative py-1.5 px-2 rounded-lg border text-[7px] uppercase tracking-wider transition-all duration-300 active:scale-95 text-left leading-tight ${
                     isActive
                       ? `bg-white/15 text-white border-white/40 shadow-[0_0_10px_rgba(255,255,255,0.15)]`
@@ -255,8 +244,11 @@ export const FeaturesTab = ({
                   }
                   title={vp.description}
                 >
-                  <span className="font-black tracking-[0.15em]">
+                  <span className="block font-black tracking-[0.15em]">
                     {vp.name}
+                  </span>
+                  <span className="block mt-0.5 text-[6px] tracking-[0.1em] text-white/30 group-hover:text-white/50 normal-case">
+                    {vp.subtitle}
                   </span>
                   {isActive && (
                     <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-white shadow-[0_0_4px_rgba(255,255,255,0.5)]" />

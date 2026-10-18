@@ -41,32 +41,28 @@ export interface PhysicsParams {
 // Byte size: 4 + 4 + 8 + 4 + 4 + 4 + 4 = 32 bytes
 export const PHYSICS_PARAM_SIZE = 32;
 
-// --- Storage Buffer Objects (SSBO) - std430 ---
+// Disk parameters for golden-orange grading (4 floats, 16 bytes, padded to 32)
+export const DISK_PARAM_SIZE = 32;
 
-/**
- * Ray Payload for Compute Shaders
- * Used for wavefront path tracing queues.
- *
- * Struct Layout:
- * - origin: vec3<f32> (12) + pad (4) = 16
- * - direction: vec3<f32> (12) + pad (4) = 16
- * - color: vec3<f32> (12) + pad (4) = 16
- * - throughput: vec3<f32> (12) + pad (4) = 16
- * - pixel_index: u32 (4)
- * - bounces: u32 (4)
- * - terminated: u32 (4)
- * - _pad: u32 (4) -> To align to 16 bytes
- *
- * Total: 16 * 4 + 16 = 80 bytes
- */
-export const RAY_PAYLOAD_SIZE = 80;
+// Extended physics parameters with disk controls for reference-shot composition
+export interface ExtendedPhysicsParams {
+  mass: number; // f32 (4)
+  spin: number; // f32 (4)
+  resolution: [number, number]; // vec2<f32> (8)
+  time: number; // f32 (4)
+  dt: number; // f32 (4)
+  frameIndex: number; // u32 (4)
+  _padding: number; // 4 bytes padding to reach 32
+  // Disk parameters
+  diskTemp: number; // f32 (4) - Base temperature in Kelvin
+  diskDensity: number; // f32 (4) - Optical density multiplier
+  diskGain: number; // f32 (4) - HDR exposure gain
+}
 
-/**
- * Helper to write PhysicsParams to a buffer
- */
-export function writePhysicsParams(
+// Helper to write ExtendedPhysicsParams to a buffer
+export function writeExtendedPhysicsParams(
   buffer: Float32Array,
-  params: PhysicsParams,
+  params: ExtendedPhysicsParams,
   offset: number = 0,
 ) {
   buffer[offset + 0] = params.mass;
@@ -81,11 +77,13 @@ export function writePhysicsParams(
     buffer.length,
   );
   intView[offset + 6] = params.frameIndex;
+  // Disk parameters at offset 32
+  buffer[offset + 32] = params.diskTemp;
+  buffer[offset + 33] = params.diskDensity;
+  buffer[offset + 34] = params.diskGain;
 }
 
-/**
- * Helper to pack CameraUniforms into a Float32Array (288 bytes = 72 floats)
- */
+// Helper to pack CameraUniforms into a Float32Array (352 bytes = 88 floats)
 export function writeCameraUniforms(
   buffer: Float32Array,
   uniforms: CameraUniforms,
@@ -114,3 +112,51 @@ export function writeCameraUniforms(
   buffer[offset + 86] = uniforms.direction[2] ?? 0;
   buffer[offset + 87] = 0.0; // pad
 }
+
+// --- Storage Buffer Objects (SSBO) - std430 ---
+
+/**
+ * Ray Payload for Compute Shaders
+ * Used for wavefront path tracing queues.
+ */
+export const RAY_PAYLOAD_SIZE = 80;
+
+/**
+ * Helper to write PhysicsParams to a buffer
+ */
+export function writePhysicsParams(
+  buffer: Float32Array,
+  params: PhysicsParams,
+  offset: number = 0,
+) {
+  buffer[offset + 0] = params.mass;
+  buffer[offset + 1] = params.spin;
+  buffer[offset + 2] = params.resolution[0];
+  buffer[offset + 3] = params.resolution[1];
+  buffer[offset + 4] = params.time;
+  buffer[offset + 5] = params.dt;
+  const intView = new Uint32Array(
+    buffer.buffer,
+    buffer.byteOffset,
+    buffer.length,
+  );
+  intView[offset + 6] = params.frameIndex;
+}
+
+/**
+ * Helper to write ExtendedPhysicsParams to a buffer (same as above, for convenience)
+ */
+export function writeExtendedPhysicsParams2(
+  buffer: Float32Array,
+  params: ExtendedPhysicsParams,
+  offset: number = 0,
+) {
+  writeExtendedPhysicsParams(buffer, params, offset);
+}
+
+/**
+ * Disk parameter IDs for shader binding
+ */
+export const DiskParamTemp = 0;
+export const DiskParamDensity = 1;
+export const DiskParamGain = 2;

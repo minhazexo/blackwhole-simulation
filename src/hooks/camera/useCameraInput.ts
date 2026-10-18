@@ -75,12 +75,15 @@ export function useCameraInput(rig: CameraRig, deps: InputDeps) {
 
         const sensitivity = 0.008;
 
-        // Directly mutate physics state
-        // Note: We add to position AND set velocity (for "throw" momentum on release)
+        // Direct drag mapping: screen X orbits (theta), screen Y pitches
+        // (phi). No momentum is injected here — the render loop integrates
+        // any leftover velocity, and adding drag velocity on top of the
+        // direct delta made a short drag overshoot by ~5x, pinning phi at
+        // the pole clamp so vertical movement appeared to stop working.
         rig.physicsRef.current.theta += deltaX * sensitivity;
         rig.physicsRef.current.phi += deltaY * sensitivity;
-        rig.physicsRef.current.thetaVelocity = deltaX * sensitivity * 0.4;
-        rig.physicsRef.current.phiVelocity = deltaY * sensitivity * 0.4;
+        rig.physicsRef.current.thetaVelocity = 0;
+        rig.physicsRef.current.phiVelocity = 0;
 
         rig.lastMousePos.current.x = e.clientX;
         rig.lastMousePos.current.y = e.clientY;
@@ -199,7 +202,8 @@ export function useCameraInput(rig: CameraRig, deps: InputDeps) {
 
         // Zoom
         if (rig.touchState.current.initialDistance > 0) {
-          const ratio = currentDistance / rig.touchState.current.initialDistance;
+          const ratio =
+            currentDistance / rig.touchState.current.initialDistance;
           const zoomDelta = (1 - ratio) * 2.0;
           setParams((prev) => ({
             ...prev,
@@ -230,10 +234,12 @@ export function useCameraInput(rig: CameraRig, deps: InputDeps) {
         const deltaY = t0.clientY - rig.lastMousePos.current.y;
         const sensitivity = 0.005;
 
+        // Direct mapping (same as mouse): X orbits, Y pitches. No momentum
+        // injection — see the mouse handler for why.
         rig.physicsRef.current.theta += deltaX * sensitivity;
         rig.physicsRef.current.phi += deltaY * sensitivity;
-        rig.physicsRef.current.thetaVelocity = deltaX * sensitivity * 0.5;
-        rig.physicsRef.current.phiVelocity = deltaY * sensitivity * 0.5;
+        rig.physicsRef.current.thetaVelocity = 0;
+        rig.physicsRef.current.phiVelocity = 0;
 
         rig.lastMousePos.current.x = t0.clientX;
         rig.lastMousePos.current.y = t0.clientY;

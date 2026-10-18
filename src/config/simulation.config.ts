@@ -190,7 +190,7 @@ export const SIMULATION_CONFIG = {
 
   // Star Density Control
   starDensity: {
-    default: 1.0,
+    default: 1.3,
     min: 0.0,
     max: 2.0,
     step: 0.1,

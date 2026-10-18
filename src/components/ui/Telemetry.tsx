@@ -63,7 +63,7 @@ export const Telemetry = memo(function Telemetry({
           {
             label: "Horizon",
             value: fixedWidth(eventHorizonRadius, 6, 2),
-            unit: "Rs",
+            unit: "M",
           },
           {
             label: "Redshift",

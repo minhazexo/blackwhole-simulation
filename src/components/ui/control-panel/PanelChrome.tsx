@@ -129,7 +129,7 @@ export const PanelChrome = ({
                           Event Horizon
                         </span>
                         <span className="text-[10px] font-mono text-white/80 tabular-nums">
-                          {calculatedRadii.eventHorizon.toFixed(2)}Rs
+                          {calculatedRadii.eventHorizon.toFixed(2)}M
                         </span>
                       </div>
                       <div className="flex flex-col items-center sm:items-start min-w-[50px]">
@@ -137,7 +137,7 @@ export const PanelChrome = ({
                           Photon Ring
                         </span>
                         <span className="text-[10px] font-mono text-white font-bold tabular-nums">
-                          {calculatedRadii.photonSphere.toFixed(2)}Rp
+                          {calculatedRadii.photonSphere.toFixed(2)}M
                         </span>
                       </div>
                       <div className="flex flex-col items-center sm:items-start min-w-[50px]">
@@ -145,7 +145,7 @@ export const PanelChrome = ({
                           Stable Orbit
                         </span>
                         <span className="text-[10px] font-mono text-white font-bold tabular-nums">
-                          {calculatedRadii.isco.toFixed(2)}Ri
+                          {calculatedRadii.isco.toFixed(2)}M
                         </span>
                       </div>
                     </div>

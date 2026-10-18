@@ -46,7 +46,10 @@ void main() {
         return;
     }
 
-    // Camera
+    // Camera roll: rotate the ray grid about the view axis before any ray
+    // is generated, so lensing, disk, and sky all tilt together.
+    uv = rollUV(uv);
+
     vec3 ro, rd;
     if (length(u_camPos) > 0.001) {
         ro = u_camPos;

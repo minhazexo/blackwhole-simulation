@@ -25,6 +25,7 @@ import {
 import type { RayTracingQuality } from "@/types/features";
 import { PERFORMANCE_CONFIG } from "@/config/performance.config";
 import { PHYSICS_CONSTANTS } from "@/config/physics.config";
+import { REFERENCE_SHOT } from "@/config/reference-shot.config";
 
 export interface WebGLError {
   type: "context" | "shader" | "program" | "memory";
@@ -74,6 +75,9 @@ export class WebGLRenderer {
   private blueNoiseTex: WebGLTexture | null = null;
   private diskLUT: WebGLTexture | null = null;
   private spectrumLUT: WebGLTexture | null = null;
+  /** Equirectangular Milky Way plate (public/textures). Never re-uploaded. */
+  private milkywayTex: WebGLTexture | null = null;
+  private skyTextureRequested = false;
 
   private width = 0;
   private height = 0;
@@ -225,8 +229,76 @@ export class WebGLRenderer {
 
     this.noiseTex = createNoiseTexture(gl, 256);
     this.blueNoiseTex = createBlueNoiseTexture(gl, 256);
+    this.loadSkyTexture();
 
     // LUTs will be initialized when physics starts
+  }
+
+  /**
+   * Upload the Milky Way panorama once, asynchronously.
+   *
+   * A 1x1 black placeholder is bound first so the sampler always points at a
+   * valid texture (sampling an unbound sampler2D is undefined and reads as
+   * driver-dependent garbage). The real plate replaces it in place, which
+   * keeps the texture object stable for the lifetime of the renderer.
+   */
+  private loadSkyTexture(): void {
+    if (!this.gl || this.skyTextureRequested) return;
+    this.skyTextureRequested = true;
+    const gl = this.gl;
+
+    const placeholder = createTextureFromData(gl, {
+      width: 1,
+      height: 1,
+      data: new Uint8Array([0, 0, 0, 255]),
+      minFilter: gl.LINEAR,
+      magFilter: gl.LINEAR,
+      wrap: gl.CLAMP_TO_EDGE,
+    });
+    if (!placeholder) return;
+    this.milkywayTex = placeholder;
+
+    const image = new Image();
+    image.decoding = "async";
+    image.onload = () => {
+      // The renderer may have been disposed while the (4MB) plate decoded.
+      if (!this.gl || this.milkywayTex !== placeholder) return;
+      gl.bindTexture(gl.TEXTURE_2D, placeholder);
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+      gl.texImage2D(
+        gl.TEXTURE_2D,
+        0,
+        gl.RGBA,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        image,
+      );
+      gl.generateMipmap(gl.TEXTURE_2D);
+      gl.texParameteri(
+        gl.TEXTURE_2D,
+        gl.TEXTURE_MIN_FILTER,
+        gl.LINEAR_MIPMAP_LINEAR,
+      );
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+      const aniso = gl.getExtension("EXT_texture_filter_anisotropic");
+      if (aniso) {
+        const max = gl.getParameter(aniso.MAX_TEXTURE_MAX_ANISOTROPY_EXT);
+        gl.texParameterf(
+          gl.TEXTURE_2D,
+          aniso.TEXTURE_MAX_ANISOTROPY_EXT,
+          Math.min(4, max as number),
+        );
+      }
+      gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    };
+    image.onerror = () => {
+      // Keep the black placeholder: procedural stars still render.
+      // eslint-disable-next-line no-console
+      console.warn("[renderer] Milky Way plate failed to load");
+    };
+    image.src = "/textures/milkyway_2020_4k.jpg";
   }
 
   private initPipelines() {
@@ -629,6 +701,11 @@ export class WebGLRenderer {
       gl.bindTexture(gl.TEXTURE_2D, this.spectrumLUT);
       this.uniformBatcher.set("u_spectrumLUT", 5);
     }
+    if (this.milkywayTex) {
+      gl.activeTexture(gl.TEXTURE6);
+      gl.bindTexture(gl.TEXTURE_2D, this.milkywayTex);
+      this.uniformBatcher.set("u_milkywayTex", 6);
+    }
 
     // Physics Bridge Integration (zero-alloc: reuse _shadowCurve)
     let shadowShiftMin = -(params.mass * 2.0) * 2.6; // Fallback
@@ -705,6 +782,14 @@ export class WebGLRenderer {
       features.kerrShadow ? 1.0 : 0.0,
     );
     this.uniformBatcher.set1f("u_lensing_strength", params.lensing ?? 1.0);
+    // Composition: camera roll about the view axis (degrees -> radians) plus
+    // the sky/disk exposure constants from the reference-shot config.
+    this.uniformBatcher.set1f(
+      "u_roll",
+      ((params.roll ?? REFERENCE_SHOT.camera.rollDeg) * Math.PI) / 180,
+    );
+    this.uniformBatcher.set1f("u_milkywayGain", REFERENCE_SHOT.sky.gain);
+    this.uniformBatcher.set1f("u_diskGain", REFERENCE_SHOT.disk.gain);
     this.uniformBatcher.set1f(
       "u_frame_dragging_strength",
       PHYSICS_CONSTANTS.gravity.frameDraggingStrength,
@@ -854,6 +939,10 @@ export class WebGLRenderer {
       if (this.blueNoiseTex) this.gl.deleteTexture(this.blueNoiseTex);
       if (this.diskLUT) this.gl.deleteTexture(this.diskLUT);
       if (this.spectrumLUT) this.gl.deleteTexture(this.spectrumLUT);
+      if (this.milkywayTex) {
+        this.gl.deleteTexture(this.milkywayTex);
+        this.milkywayTex = null;
+      }
     }
     if (this.bloomManager) this.bloomManager.cleanup();
     if (this.reprojectionManager) this.reprojectionManager.cleanup();

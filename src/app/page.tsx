@@ -76,6 +76,7 @@ import { DEFAULT_PRESET_MODE } from "@/config/simulation.config";
 import { getPreset } from "@/config/feature-flags";
 import type { RayTracingQuality } from "@/types/features";
 import { settingsStorage } from "@/storage/settings";
+import { REFERENCE_SHOT_FEATURES } from "@/config/reference-shot.config";
 import { useWebGPUSupport } from "@/hooks/useWebGPUSupport";
 import { useAudio } from "@/hooks/useAudio";
 import { SOLAR_MASS } from "@/physics/constants";
@@ -92,10 +93,12 @@ const App = () => {
     // Deterministic opening state: High Quality preset (High ray tracing)
     // and Auto-Tune off. Nothing recalibrates this after mount, so the first
     // paint and the scene a minute later use the same quality rung.
-    const defaultFeatures = getPreset(DEFAULT_PRESET_MODE);
+    // Reference-shot composition: High Quality feature set without jets, so
+    // the opening frame matches public/Space.jpg. Camera framing, roll, and
+    // disk appearance come from DEFAULT_PARAMS (reference-shot.config.ts).
     return {
       ...DEFAULT_PARAMS,
-      features: defaultFeatures,
+      features: { ...REFERENCE_SHOT_FEATURES },
       performancePreset: DEFAULT_PRESET_MODE,
       // Auto-Tune starts OFF: the opening view keeps the High Quality preset
       // and its High ray-tracing rung instead of being stepped down by the
@@ -214,6 +217,10 @@ const App = () => {
     currentViewpointDef,
     tourIndex,
     tourTotal,
+    nextViewpoint,
+    prevViewpoint,
+    toggleTourPause,
+    tourPaused,
   } = useCamera(params, setParams);
 
   // Phase 9.5: Debug Overlay
@@ -238,6 +245,10 @@ const App = () => {
     nudgeCamera,
     toggleDebug,
     stopCinematic,
+    isTourActive: cinematicMode === "viewpoints-tour",
+    onTourNext: nextViewpoint,
+    onTourPrev: prevViewpoint,
+    onToggleTourPause: toggleTourPause,
   });
 
   // Phase 6: WebGPU Support Hook
@@ -479,6 +490,13 @@ const App = () => {
           currentViewpointDef={currentViewpointDef}
           tourIndex={tourIndex}
           tourTotal={tourTotal}
+          spin={params.spin}
+          mass={params.mass}
+          tourPaused={tourPaused}
+          onPrevViewpoint={prevViewpoint}
+          onNextViewpoint={nextViewpoint}
+          onToggleTourPause={toggleTourPause}
+          onExitTour={stopCinematic}
         />
 
         {showQuantum && (

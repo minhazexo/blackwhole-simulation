@@ -288,3 +288,15 @@
     transform: translate(-10%, 10%);
   }
 }
+
+/* Scene dwell countdown for CinematicOverlay: sweeps left→right over the
+   scene's dwell duration. Restarted by remounting the element (key=id) and
+   frozen with animation-play-state while the tour is paused. */
+@keyframes scene-dwell {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}

@@ -11,7 +11,8 @@ import { SIMULATION_CONFIG } from "@/config/simulation.config";
  *   Arrow Up/Down     -- orbit camera vertically (adjusts mouse.y)
  *   +/=               -- zoom in
  *   -                 -- zoom out
- *   Space             -- pause/resume
+ *   Space             -- pause/resume (pauses the tour when one is active)
+ *   [ / ]             -- previous / next tour scene (viewpoints tour only)
  *   1-4               -- apply performance presets
  *   H                 -- toggle UI visibility
  *   D                 -- (reserved for debug overlay)
@@ -27,6 +28,11 @@ interface UseKeyboardOptions {
   toggleDebug?: () => void;
   onScreenshot?: () => void;
   stopCinematic?: () => void;
+  /** True while the viewpoints tour is playing (Space pauses it instead of the sim). */
+  isTourActive?: boolean;
+  onTourNext?: () => void;
+  onTourPrev?: () => void;
+  onToggleTourPause?: () => void;
 }
 
 export function useKeyboard({
@@ -37,6 +43,10 @@ export function useKeyboard({
   toggleDebug,
   onScreenshot,
   stopCinematic,
+  isTourActive,
+  onTourNext,
+  onTourPrev,
+  onToggleTourPause,
 }: UseKeyboardOptions) {
   const handleKeyDown = useCallback(
     (e: KeyboardEvent) => {
@@ -96,10 +106,25 @@ export function useKeyboard({
           }));
           break;
 
-        // Pause/Resume
+        // Pause/Resume — the tour owns Space while it is playing.
         case " ":
           e.preventDefault();
-          setParams((prev) => ({ ...prev, paused: !prev.paused }));
+          if (isTourActive) {
+            onToggleTourPause?.();
+          } else {
+            setParams((prev) => ({ ...prev, paused: !prev.paused }));
+          }
+          break;
+
+        // Tour scene navigation
+        case "[":
+          e.preventDefault();
+          onTourPrev?.();
+          break;
+
+        case "]":
+          e.preventDefault();
+          onTourNext?.();
           break;
 
         // Preset hotkeys: 1=max-perf, 2=balanced, 3=high, 4=ultra
@@ -155,6 +180,10 @@ export function useKeyboard({
       toggleDebug,
       onScreenshot,
       stopCinematic,
+      isTourActive,
+      onTourNext,
+      onTourPrev,
+      onToggleTourPause,
     ],
   );
 

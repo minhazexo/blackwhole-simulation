@@ -7,6 +7,7 @@ import {
   SIMULATION_CONFIG,
   DEFAULT_PRESET_MODE,
 } from "@/config/simulation.config";
+import { REFERENCE_SHOT } from "@/config/reference-shot.config";
 
 export type QualityLevel = RayTracingQuality;
 
@@ -27,19 +28,24 @@ export interface SimulationParams {
   features?: FeatureToggles;
   performancePreset?: import("./features").PresetName;
   verticalAngle?: number;
+  /** Camera roll about the view axis, in degrees. Raises the right side. */
+  roll?: number;
 }
 
 export const DEFAULT_PARAMS: SimulationParams = {
   mass: SIMULATION_CONFIG.mass.default,
   spin: SIMULATION_CONFIG.spin.default, // Using direct physics spin
-  diskDensity: SIMULATION_CONFIG.diskDensity.default,
-  diskTemp: SIMULATION_CONFIG.diskTemp.default,
-  lensing: SIMULATION_CONFIG.lensing.default,
+  // Disk + camera defaults follow the reference-shot composition so a fresh
+  // visit opens on the framed shot instead of a close-up. The simulation,
+  // sliders, and other presets still read from SIMULATION_CONFIG for ranges.
+  diskDensity: REFERENCE_SHOT.disk.density,
+  diskTemp: REFERENCE_SHOT.disk.temperatureK,
+  lensing: REFERENCE_SHOT.lensingStrength,
   paused: false,
-  zoom: SIMULATION_CONFIG.zoom.default,
+  zoom: REFERENCE_SHOT.camera.distance,
   autoSpin: SIMULATION_CONFIG.autoSpin.default,
-  diskSize: SIMULATION_CONFIG.diskSize.default,
-  diskScaleHeight: SIMULATION_CONFIG.diskScaleHeight.default,
+  diskSize: REFERENCE_SHOT.disk.size,
+  diskScaleHeight: REFERENCE_SHOT.disk.scaleHeight,
   // Auto-Tune (adaptive resolution + quality governor) is opt-in: the site
   // opens with the High Quality preset locked in at High ray tracing.
   adaptiveResolution: false,
@@ -47,7 +53,8 @@ export const DEFAULT_PARAMS: SimulationParams = {
   starDensity: SIMULATION_CONFIG.starDensity.default,
   features: SIMULATION_CONFIG.features.default,
   performancePreset: DEFAULT_PRESET_MODE,
-  verticalAngle: SIMULATION_CONFIG.verticalAngle.default,
+  verticalAngle: REFERENCE_SHOT.camera.verticalAngleDeg,
+  roll: REFERENCE_SHOT.camera.rollDeg,
 };
 
 export interface MouseState {

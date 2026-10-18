@@ -24,6 +24,10 @@ export const COMMON_CHUNK = `
   uniform sampler2D u_noiseTex;
   uniform sampler2D u_blueNoiseTex;
   uniform sampler2D u_spectrumLUT;
+  uniform sampler2D u_milkywayTex; // Equirectangular Milky Way plate
+  uniform float u_milkywayGain;    // Plate exposure (linear)
+  uniform float u_roll;            // Camera roll about the view axis (radians)
+  uniform float u_diskGain;        // Accretion-disk emission exposure
   uniform float u_debug; // Debug mode toggle
 
   uniform float u_show_redshift; // Toggle for gravitational redshift overlay
@@ -47,6 +51,18 @@ export const COMMON_CHUNK = `
   mat2 rot(float a) {
     float s = sin(a), c = cos(a);
     return mat2(c, -s, s, c);
+  }
+
+  // Screen-space camera roll. Rotating the ray grid about the view axis is
+  // exactly a roll of the camera: the shadow stays circular (it is a sphere
+  // in projection), the disk tilts on screen, and the sky rotates with the
+  // scene instead of being transformed independently.
+  vec2 rollUV(vec2 uv) {
+    float c = cos(u_roll);
+    float s = sin(u_roll);
+    // Camera roll of +u_roll appears as a counter-clockwise turn of the
+    // rendered scene, so the sampled ray coordinates turn the other way.
+    return vec2(c * uv.x + s * uv.y, -s * uv.x + c * uv.y);
   }
 
   // ACES Tone Mapping (Narkowicz 2014)

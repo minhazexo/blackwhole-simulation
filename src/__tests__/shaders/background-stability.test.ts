@@ -22,18 +22,33 @@ describe("stationary background", () => {
 
   it("anchors star cells to the view direction only", () => {
     expect(BACKGROUND_CHUNK).not.toContain("pmOffset");
+    // Stars live on a cube-face grid projected from the ray direction, and
+    // every hash input is built from that cell + face id — never time.
     expect(BACKGROUND_CHUNK).toContain(
-      "vec3 gridPos = dir * gridScale + gridOffset;",
+      "vec2 fuv = cubeFaceCoord(dir, faceId);",
     );
+    expect(BACKGROUND_CHUNK).toContain(
+      "hash(vec3(cell, faceId * 31.0 + seed))",
+    );
+    expect(BACKGROUND_CHUNK).not.toMatch(/hash\([^)]*u_time/);
   });
 
-  it("samples nebula noise without time offsets", () => {
-    expect(BACKGROUND_CHUNK).not.toMatch(/warpedPos\d?\s*=[^;]*u_time/);
+  it("samples the sky plate without time offsets", () => {
+    // Only the twinkle term may read u_time; the plate lookup and the star
+    // hashes must be a pure function of direction.
+    const plateStart = BACKGROUND_CHUNK.indexOf("vec3 sampleSkyPlate");
+    const plateEnd = BACKGROUND_CHUNK.indexOf("// Smooth star color");
+    expect(plateStart).toBeGreaterThan(-1);
+    expect(plateEnd).toBeGreaterThan(plateStart);
+    expect(BACKGROUND_CHUNK.slice(plateStart, plateEnd)).not.toMatch(/u_time/);
   });
 
   it("keeps twinkle separate from star positions", () => {
     // Twinkle is a brightness term (allowed to animate) applied after the
     // cell/position hashes, never a coordinate offset.
-    expect(BACKGROUND_CHUNK).toMatch(/twinkle\s*=\s*0\.88\s*\+/);
+    expect(BACKGROUND_CHUNK).toMatch(
+      /twinkle\s*=\s*0\.955\s*\+\s*0\.045\s*\*\s*sin\(/,
+    );
+    expect(BACKGROUND_CHUNK).toContain("col * bright * shape * twinkle");
   });
 });

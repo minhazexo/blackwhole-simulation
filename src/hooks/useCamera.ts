@@ -206,7 +206,8 @@ export function useCamera(
         state.theta += state.thetaVelocity * step;
         state.phi += state.phiVelocity * step;
 
-        state.phi = Math.max(0.001, Math.min(Math.PI - 0.001, state.phi));
+        state.phi = Math.max(0.001, state.phi);
+        state.phi = Math.min(state.phi, Math.PI);
       } else {
         // --- INTERACTIVE MODE: USER CONTROL ---
         // Apply Drag Inertia / Momentum (per-60Hz-frame constants, scaled
@@ -230,7 +231,8 @@ export function useCamera(
         }
 
         // Constraints
-        state.phi = Math.max(0.001, Math.min(Math.PI - 0.001, state.phi));
+        state.phi = Math.max(0.001, state.phi);
+        state.phi = Math.min(state.phi, Math.PI);
         state.theta = state.theta % (2 * Math.PI);
         if (state.theta < 0) state.theta += 2 * Math.PI;
 
@@ -258,7 +260,9 @@ export function useCamera(
       // even when the camera was effectively static.
       const fastPath = cine.active || cine.recovering;
       frameCount++;
-      if (frameCount >= (fastPath ? SYNC_INTERVAL_ACTIVE : SYNC_INTERVAL_IDLE)) {
+      if (
+        frameCount >= (fastPath ? SYNC_INTERVAL_ACTIVE : SYNC_INTERVAL_IDLE)
+      ) {
         frameCount = 0;
         // Shortest wrapped distance for theta (mod 2π).
         let dTheta =
@@ -317,6 +321,10 @@ export function useCamera(
     startCinematic: tour.startCinematic,
     startViewpoint: tour.startViewpoint,
     startAllViewpointsTour: tour.startAllViewpointsTour,
+    nextViewpoint: tour.nextViewpoint,
+    prevViewpoint: tour.prevViewpoint,
+    toggleTourPause: tour.toggleTourPause,
+    tourPaused: tour.tourPaused,
     stopCinematic: tour.stopCinematic,
     resetCamera: tour.resetCamera,
     isCinematic: tour.isCinematic,

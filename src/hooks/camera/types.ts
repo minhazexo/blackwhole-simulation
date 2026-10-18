@@ -1,5 +1,6 @@
 import type * as React from "react";
 import { SIMULATION_CONFIG } from "@/config/simulation.config";
+import { REFERENCE_SHOT } from "@/config/reference-shot.config";
 import type { SimulationParams } from "@/types/simulation";
 
 /**
@@ -23,7 +24,8 @@ export interface CameraState {
 /**
  * Cinematic director mode.
  */
-export type CinematicMode = "orbit" | "dive" | "viewpoint" | "viewpoints-tour" | null;
+export type CinematicMode =
+  "orbit" | "dive" | "viewpoint" | "viewpoints-tour" | null;
 
 /**
  * Extended Cinematic State Machine
@@ -63,6 +65,13 @@ export interface CinematicState {
   tourTotal?: number;
   /** Duration (seconds) each viewpoint dwells before advancing */
   tourDwellDuration?: number;
+  /**
+   * When true the tour dwell timer is frozen: the camera stops drifting and
+   * the tour will not advance to the next scene until resumed. The scene
+   * itself stays on screen (unlike pausing the simulation, which would stop
+   * the disk as well).
+   */
+  tourPaused?: boolean;
 }
 
 /**
@@ -93,8 +102,10 @@ export const TARGET_VIEWPORT_COVERAGE = 0.7; // 70% of viewport (60-80% range)
 export const ACCRETION_DISK_OUTER_RADIUS_MULTIPLIER = 12.0; // Outer disk is ~12x event horizon
 // Default auto-spin if not provided
 export const DEFAULT_AUTO_SPIN = SIMULATION_CONFIG.autoSpin.default;
+// Opening pose comes from the reference-shot composition so the camera, the
+// disk angle, and the preset in reference-shot.config.ts stay in sync.
 export const DEFAULT_VERTICAL_ANGLE =
-  (SIMULATION_CONFIG.verticalAngle.default * Math.PI) / 180;
+  (REFERENCE_SHOT.camera.verticalAngleDeg * Math.PI) / 180;
 
 /**
  * Shared mutable camera rig.
@@ -123,7 +134,7 @@ export interface CameraRig {
  */
 export function createInitialCameraState(): CameraState {
   return {
-    theta: Math.PI,
+    theta: Math.PI * 0.75,
     phi: DEFAULT_VERTICAL_ANGLE,
     thetaVelocity: 0,
     phiVelocity: 0,
@@ -157,5 +168,6 @@ export function createInitialCinematicState(): CinematicState {
     tourIndex: undefined,
     tourTotal: undefined,
     tourDwellDuration: undefined,
+    tourPaused: false,
   };
 }

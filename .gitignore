@@ -56,3 +56,6 @@ physics-engine/target
 physics-engine/pkg
 /public/wasm
 nul
+
+# local visual iteration captures
+/.shots/

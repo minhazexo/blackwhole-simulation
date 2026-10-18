@@ -2,7 +2,11 @@ import { useCallback, useState } from "react";
 import type * as React from "react";
 import { clampAndValidate } from "@/utils/validation";
 import type { SimulationParams } from "@/types/simulation";
-import { VIEWPOINTS, getViewpoint } from "@/config/viewpoints.config";
+import {
+  TOUR_DWELL_SECONDS,
+  VIEWPOINTS,
+  getViewpoint,
+} from "@/config/viewpoints.config";
 import {
   DEFAULT_AUTO_SPIN,
   DEFAULT_ZOOM,
@@ -48,17 +52,18 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
 
   // Cinematic State (UI Sync)
   const [isCinematic, setIsCinematic] = useState(false);
-  const [cinematicMode, setCinematicMode] =
-    useState<CinematicMode>(null);
-  const [currentViewpointId, setCurrentViewpointId] = useState<
-    string | null
-  >(null);
+  const [cinematicMode, setCinematicMode] = useState<CinematicMode>(null);
+  const [currentViewpointId, setCurrentViewpointId] = useState<string | null>(
+    null,
+  );
   const currentViewpointDef = currentViewpointId
     ? getViewpoint(currentViewpointId)
     : null;
   // Tour progress state
   const [tourIndex, setTourIndex] = useState(0);
   const [tourTotal, setTourTotal] = useState(0);
+  // Mirrors cinematicRef.current.tourPaused so the overlay can re-render.
+  const [tourPaused, setTourPausedState] = useState(false);
 
   /**
    * Shared ending for sequences that expire on their own (orbit timeout,
@@ -72,15 +77,20 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
       rig.cinematicRef.current.mode = null;
       rig.cinematicRef.current.recovering = true;
       rig.cinematicRef.current.recoverStartTime = now;
+      rig.cinematicRef.current.tourPaused = false;
       setIsCinematic(false);
       setCinematicMode(null);
       setCurrentViewpointId(null);
+      setTourPausedState(false);
     },
     [rig],
   );
 
   const stopCinematic = useCallback(() => {
-    if (rig.cinematicRef.current.active || rig.cinematicRef.current.recovering) {
+    if (
+      rig.cinematicRef.current.active ||
+      rig.cinematicRef.current.recovering
+    ) {
       // Restore autoSpin if we killed it for any cinematic mode
       setParams((prev) => ({ ...prev, autoSpin: DEFAULT_AUTO_SPIN }));
 
@@ -188,15 +198,13 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
     const currentZoom = rig.paramsRef.current.zoom;
 
     // Collect all viewpoint IDs
-    const allIds: string[] = VIEWPOINTS.map(
-      (vp: { id: string }) => vp.id,
-    );
+    const allIds: string[] = VIEWPOINTS.map((vp: { id: string }) => vp.id);
     const firstId = allIds[0];
     const firstDef = firstId ? getViewpoint(firstId) : undefined;
 
     if (!firstDef) return;
 
-    const DWELL_PER_VIEWPOINT = 10.0; // seconds per viewpoint
+    const DWELL_PER_VIEWPOINT = TOUR_DWELL_SECONDS; // seconds per viewpoint
 
     rig.cinematicRef.current = {
       active: true,
@@ -233,7 +241,9 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
       tourIndex: 0,
       tourTotal: allIds.length,
       tourDwellDuration: DWELL_PER_VIEWPOINT,
+      tourPaused: false,
     };
+    setTourPausedState(false);
 
     setIsCinematic(true);
     setCinematicMode("viewpoints-tour");
@@ -326,46 +336,86 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
    * Called once per frame by the animation loop while dwelling.
    * Tour complete → recover to start; otherwise fly to the next viewpoint.
    */
+  /**
+   * Fly to a specific scene in the active viewpoints tour. Shared by the
+   * automatic dwell advance and the manual next / previous controls so all
+   * three paths produce exactly the same state transition.
+   */
+  const goToTourIndex = useCallback(
+    (index: number, now: number) => {
+      const cine = rig.cinematicRef.current;
+      const total = cine.tourTotal ?? 0;
+      if (cine.mode !== "viewpoints-tour" || total <= 0) return;
+
+      const clamped = Math.max(0, Math.min(total - 1, index));
+      const vpId = cine.tourViewpointIds?.[clamped];
+      if (!vpId) return;
+      const def = getViewpoint(vpId);
+      if (!def) return;
+
+      const state = rig.physicsRef.current;
+      cine.tourIndex = clamped;
+      // Any manual scene change resumes the tour.
+      cine.tourPaused = false;
+      setTourPausedState(false);
+      cine.viewpointId = def.id;
+      cine.viewpointPhase = "flying";
+      cine.viewpointPhaseStartTime = now;
+      cine.viewpointStartParams = {
+        theta: state.theta,
+        phi: state.phi,
+        zoom: rig.paramsRef.current.zoom,
+      };
+      cine.viewpointTargetParams = {
+        theta: def.camera.theta,
+        phi: def.camera.phi,
+        zoom: def.camera.zoom,
+      };
+      cine.viewpointAnimType = def.animation.type;
+      cine.viewpointAnimSpeed = def.animation.speed ?? 0.1;
+
+      setTourIndex(clamped);
+      setCurrentViewpointId(def.id);
+    },
+    [rig],
+  );
+
   const advanceTour = useCallback(
     (now: number) => {
       const vp = rig.cinematicRef.current;
-      const state = rig.physicsRef.current;
-      // Advance to next viewpoint
       const nextIndex = (vp.tourIndex ?? 0) + 1;
 
       if (nextIndex >= (vp.tourTotal ?? 0)) {
         // Tour complete → recover to start
         enterRecovery(now);
       } else {
-        // Transition to next viewpoint
-        const nextVpId = vp.tourViewpointIds?.[nextIndex];
-        if (nextVpId) {
-          const nextVpDef = getViewpoint(nextVpId);
-          if (nextVpDef) {
-            vp.tourIndex = nextIndex;
-            setTourIndex(nextIndex);
-            vp.viewpointId = nextVpDef.id;
-            setCurrentViewpointId(nextVpDef.id);
-            vp.viewpointPhase = "flying";
-            vp.viewpointPhaseStartTime = now;
-            vp.viewpointStartParams = {
-              theta: state.theta,
-              phi: state.phi,
-              zoom: rig.paramsRef.current.zoom,
-            };
-            vp.viewpointTargetParams = {
-              theta: nextVpDef.camera.theta,
-              phi: nextVpDef.camera.phi,
-              zoom: nextVpDef.camera.zoom,
-            };
-            vp.viewpointAnimType = nextVpDef.animation.type;
-            vp.viewpointAnimSpeed = nextVpDef.animation.speed ?? 0.1;
-          }
-        }
+        goToTourIndex(nextIndex, now);
       }
     },
-    [rig, enterRecovery],
+    [rig, enterRecovery, goToTourIndex],
   );
+
+  /** Manual “next scene” (skips the remaining dwell time). */
+  const nextViewpoint = useCallback(() => {
+    const cine = rig.cinematicRef.current;
+    if (cine.mode !== "viewpoints-tour") return;
+    advanceTour(performance.now());
+  }, [rig, advanceTour]);
+
+  /** Manual “previous scene”. Stops at the first scene. */
+  const prevViewpoint = useCallback(() => {
+    const cine = rig.cinematicRef.current;
+    if (cine.mode !== "viewpoints-tour") return;
+    goToTourIndex((cine.tourIndex ?? 0) - 1, performance.now());
+  }, [rig, goToTourIndex]);
+
+  /** Freeze / resume the tour without pausing the simulation clock. */
+  const toggleTourPause = useCallback(() => {
+    const cine = rig.cinematicRef.current;
+    if (cine.mode !== "viewpoints-tour") return;
+    cine.tourPaused = !cine.tourPaused;
+    setTourPausedState(!!cine.tourPaused);
+  }, [rig]);
 
   /**
    * Per-frame recovery step: smooth emergence back to the pre-cinematic
@@ -455,6 +505,16 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
           cine.viewpointPhaseStartTime = now;
         }
       } else if (cine.viewpointPhase === "dwelling") {
+        // Paused tour: hold the scene. Sliding the phase start forward by the
+        // frame time keeps dwellT constant, so the dwell animation freezes and
+        // the tour never advances until it is resumed.
+        if (cine.tourPaused) {
+          cine.viewpointPhaseStartTime =
+            (cine.viewpointPhaseStartTime ?? now) + dt * 1000;
+          state.phi = Math.max(0.001, Math.min(Math.PI - 0.001, state.phi));
+          return;
+        }
+
         // Dwell: apply the viewpoint's characteristic animation
         const dwellT = (now - (cine.viewpointPhaseStartTime ?? now)) * 0.001;
 
@@ -485,7 +545,7 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
           cine.tourIndex !== undefined &&
           cine.tourTotal !== undefined
         ) {
-          const dwellDuration = cine.tourDwellDuration ?? 10.0;
+          const dwellDuration = cine.tourDwellDuration ?? TOUR_DWELL_SECONDS;
           if (dwellT >= dwellDuration) {
             advanceTour(now);
           }
@@ -576,8 +636,7 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
 
         // --- Apply with smooth interpolation (no pops) ---
         const currentZoom = rig.paramsRef.current.zoom;
-        const zoomLerp =
-          currentZoom + (frame.targetDist - currentZoom) * 0.025;
+        const zoomLerp = currentZoom + (frame.targetDist - currentZoom) * 0.025;
         if (Math.abs(zoomLerp - currentZoom) > 0.001) {
           queueZoomSync(() => zoomLerp);
         }
@@ -596,7 +655,9 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
 
         // Apply breathing to zoom (coalesced: runs every frame)
         if (Math.abs(feel.breathe) > 0.01) {
-          queueZoomSync((z) => Math.max(frame.minSafe, z + feel.breathe * 0.01));
+          queueZoomSync((z) =>
+            Math.max(frame.minSafe, z + feel.breathe * 0.01),
+          );
         }
       }
     },
@@ -640,6 +701,11 @@ export function useCameraTour(rig: CameraRig, deps: TourDeps) {
     startCinematic,
     startAllViewpointsTour,
     startViewpoint,
+    nextViewpoint,
+    prevViewpoint,
+    toggleTourPause,
+    tourPaused,
+    goToTourIndex,
     resetCamera,
     enterRecovery,
     advanceTour,
