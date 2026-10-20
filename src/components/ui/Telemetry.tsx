@@ -47,13 +47,15 @@ export const Telemetry = memo(function Telemetry({
 
   return (
     <div className="flex flex-col items-end gap-1 px-2 sm:px-0">
-      <div className="flex flex-wrap md:flex-nowrap justify-end gap-5 md:gap-10 text-right">
+      <div className="flex flex-nowrap justify-end gap-5 md:gap-10 text-right overflow-x-auto [&::-webkit-scrollbar]:hidden [scrollbar-width:none] [-ms-overflow-style:none]">
         {[
           {
             label: "FPS",
-            value: metrics?.currentFPS,
+            value: metrics?.rollingAverageFPS ?? metrics?.currentFPS,
             unit: "hz",
-            opacity: getFPSOpacity(metrics?.currentFPS || 0),
+            opacity: getFPSOpacity(
+              metrics?.rollingAverageFPS ?? metrics?.currentFPS ?? 0,
+            ),
           },
           {
             label: "Quality",

@@ -48,7 +48,13 @@ export const WebGPUCanvas = ({
   });
   // Stable per-mount objects via state initializers (created once, readable
   // during render without ref-access violations).
-  const [fpsAccum] = useState({ frames: 0, lastPush: 0, fps: 60 });
+  const [fpsAccum] = useState(() => ({
+    frames: 0,
+    lastPush: 0,
+    fps: 60,
+    samples: [] as number[],
+    smoothedFps: 60,
+  }));
   // WebGPU-path adaptive resolution. Previously the WebGPU path never scaled
   // anything (the React hook wrote params.renderScale, which nothing on this
   // path consumed). This controller lives inside the rAF loop and drives the
@@ -67,6 +73,7 @@ export const WebGPUCanvas = ({
     lastChange: 0,
     lastEnabled: true,
     prevT: 0,
+    smoothedFps: 60,
   }));
   const [error, setError] = useState<{
     message: string;
@@ -246,7 +253,14 @@ export const WebGPUCanvas = ({
       adapt.prevT = timestamp;
       const ctrlDt = Math.min(Math.max(rawDt, 0.001), 0.1);
       const instantFps = 1 / ctrlDt;
-      adapt.controller.update(instantFps, ctrlDt);
+      // Feed the adaptive controller a smoothed (EMA) FPS instead of the
+      // instantaneous per-frame value to avoid single-frame spikes driving
+      // resolution changes.
+      adapt.smoothedFps =
+        adapt.smoothedFps > 0
+          ? adapt.smoothedFps * 0.9 + instantFps * 0.1
+          : instantFps;
+      adapt.controller.update(adapt.smoothedFps, ctrlDt);
       const quantTarget =
         Math.round(adapt.controller.getTargetScale() / 0.05) * 0.05;
       const clampedTarget = Math.min(1.0, Math.max(0.5, quantTarget));
@@ -379,13 +393,19 @@ export const WebGPUCanvas = ({
         const fps = Math.round(
           (acc.frames * 1000) / Math.max(1, timestamp - acc.lastPush),
         );
+        acc.samples.push(fps);
+        if (acc.samples.length > 10) acc.samples.shift();
+        const rollingAverageFPS = Math.round(
+          acc.samples.reduce((a, b) => a + b, 0) /
+            Math.max(1, acc.samples.length),
+        );
         acc.fps = fps;
         acc.frames = 0;
         acc.lastPush = timestamp;
         onMetricsRef.current?.({
           currentFPS: fps,
           frameTimeMs: Math.round((1000 / Math.max(1, fps)) * 100) / 100,
-          rollingAverageFPS: fps,
+          rollingAverageFPS,
           quality: liveParams.features?.rayTracingQuality ?? "high",
           renderResolution: adapt.appliedScale,
         });

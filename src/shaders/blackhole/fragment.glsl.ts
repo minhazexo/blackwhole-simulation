@@ -80,7 +80,7 @@ void main() {
     vec3 bg = starfield(rd);
     float d = length(cross(ro, rd));
     float shadow = smoothstep(rh * 1.2, rh * 0.9, d);
-    float photonGlowIndicator = exp(-abs(d - rph) * 12.0) * 0.8;
+    float photonGlowIndicator = exp(-abs(d - rph) * 24.0) * 0.8;
     vec3 glowCol = vec3(0.3, 0.6, 1.0) * photonGlowIndicator;
     float diskMask = smoothstep(isco * 2.0, isco * 1.0, d) * (1.0 - smoothstep(isco * 1.0, isco * 0.8, d));
     vec3 diskColIndicator = vec3(1.0, 0.7, 0.3) * diskMask * 0.6;
@@ -249,26 +249,20 @@ void main() {
 #ifdef ENABLE_PHOTON_GLOW
     if (!hitHorizon) {
         float distToPhotonRing = abs(length(p) - rph);
-        float directRing = exp(-distToPhotonRing * 40.0) * 1.8 * u_lensing_strength;
+        float directRing = exp(-distToPhotonRing * 80.0) * 1.4 * u_lensing_strength;
         float higherOrderRing = 0.0;
         if(photonCrossings > 0) {
-          float ringSharpness = 60.0 + float(photonCrossings) * 30.0;
+          float ringSharpness = 120.0 + float(photonCrossings) * 60.0;
           float ringBrightness = exp(-float(photonCrossings) * 1.0) * 1.2;
           higherOrderRing = exp(-distToPhotonRing * ringSharpness) * ringBrightness * u_lensing_strength;
         }
-        photonColor = vec3(1.0) * (directRing + higherOrderRing);
+        photonColor = vec3(0.92, 0.24, 0.05) * (directRing + higherOrderRing);
     }
 #endif
 
     // Ergosphere
     vec3 ergoColor = vec3(0.0);
-    if(absA > 0.1 && !hitHorizon) {
-      float rFinal = length(p);
-      float cosTheta = p.y / max(rFinal, 0.001);
-      float r_ergo = kerr_ergosphere(M, a, rFinal, cosTheta);
-      float ergoGlow = exp(-abs(rFinal - r_ergo) * 20.0) * 0.35 * absA;
-      ergoColor = vec3(0.3, 0.35, 0.9) * ergoGlow;
-    }
+    // Ergosphere glow disabled to match reference frame (no blue glow).
 
     if (hitHorizon) {
         // If we hit the horizon, the background is pitch black.

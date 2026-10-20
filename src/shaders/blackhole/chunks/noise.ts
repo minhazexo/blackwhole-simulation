@@ -3,7 +3,7 @@ export const NOISE_CHUNK = `
   float hash(vec3 p) {
     // Map 3D coordinate to 2D texture UV using prime stride
     // This avoids expensive fractal arithmetic in the inner loop
-    vec2 uv = (p.xy + p.z * 37.0);
+    vec2 uv = mod(p.xy + p.z * 37.0, 256.0);
     return texture(u_noiseTex, (uv + 0.5) / 256.0).r;
   }
 

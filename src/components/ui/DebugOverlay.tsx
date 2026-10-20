@@ -99,7 +99,7 @@ export const DebugOverlay = memo(function DebugOverlay({
   };
 
   return (
-    <div className="absolute top-20 left-6 z-30 bg-black/90 backdrop-blur-md border border-white/20 rounded-lg p-4 min-w-[320px] max-w-[400px] shadow-2xl font-mono text-xs">
+    <div className="absolute top-20 left-6 z-30 bg-black/90 backdrop-blur-md border border-white/20 rounded-lg p-4 min-w-[320px] max-w-[min(400px,calc(50vw-2rem))] shadow-2xl font-mono text-xs">
       {/* Header */}
       <div className="flex justify-between items-center mb-3 pb-2 border-b border-white/10">
         <div className="flex items-center gap-2">

@@ -50,7 +50,7 @@ export const DEFAULT_PARAMS: SimulationParams = {
   // opens with the High Quality preset locked in at High ray tracing.
   adaptiveResolution: false,
   renderScale: SIMULATION_CONFIG.renderScale.default,
-  starDensity: SIMULATION_CONFIG.starDensity.default,
+  starDensity: REFERENCE_SHOT.sky.starDensity,
   features: SIMULATION_CONFIG.features.default,
   performancePreset: DEFAULT_PRESET_MODE,
   verticalAngle: REFERENCE_SHOT.camera.verticalAngleDeg,

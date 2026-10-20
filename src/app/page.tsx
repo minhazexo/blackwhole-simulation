@@ -296,11 +296,13 @@ const App = () => {
   }, [hardwareSupport.webgl, hardwareSupport.isSoftwareWebGL, forceShowCompat]);
 
   useEffect(() => {
+    let cancelled = false;
     // Trigger Physics Bridge Initialization
     // eslint-disable-next-line @typescript-eslint/no-var-requires
     const { physicsBridge } = require("@/engine/physics-bridge");
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     physicsBridge.ensureInitialized().catch((err: any) => {
+      if (cancelled) return;
       // eslint-disable-next-line no-console
       console.error("Critical Physics Initialization Failure:", err);
       // Dismiss loading overlay on failure so the user sees the canvas
@@ -313,6 +315,7 @@ const App = () => {
     // Subscribe to bridge status: a stalled worker flips to "degraded".
     // Keep the canvas visible (physicsReady stays true) and show the banner.
     const unsubscribeStatus = physicsBridge.onStatusChange((status: string) => {
+      if (cancelled) return;
       if (status === "degraded") {
         const detail = physicsBridge.getLastWorkerError();
         setPhysicsError(
@@ -326,11 +329,14 @@ const App = () => {
     // Safety timeout: dismiss loading overlay after 15s even if WASM
     // fails silently, so the user can interact with the canvas in
     // fallback mode rather than being trapped at a spinner.
-    const safetyTimeout = setTimeout(() => setPhysicsReady(true), 15000);
+    const safetyTimeout = setTimeout(() => {
+      if (!cancelled) setPhysicsReady(true);
+    }, 15000);
 
     // Poll physicsBridge.isReady() so the loading overlay can disappear
     // once the worker acknowledges WASM initialization.
     const pollInterval = setInterval(() => {
+      if (cancelled) return;
       if (physicsBridge.isReady()) {
         setPhysicsReady(true);
         clearInterval(pollInterval);
@@ -343,6 +349,7 @@ const App = () => {
     const detachVisibility = physicsBridge.attachVisibilityListener();
 
     return () => {
+      cancelled = true;
       clearInterval(pollInterval);
       clearTimeout(safetyTimeout);
       detachVisibility();

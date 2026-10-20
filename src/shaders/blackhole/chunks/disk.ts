@@ -1,6 +1,32 @@
 import { PHYSICS_CONSTANTS } from "@/config/physics.config";
 
 export const DISK_CHUNK = `
+  // Explicit temperature ramp for predictable slider behavior.
+  // Anchors: deep red -> orange -> yellow -> white -> blue.
+  // The ramp is driven by the global Disk Temp slider so the full disk
+  // follows the same progression instead of staying red because local
+  // radial temperatures are lower than the slider value.
+  vec3 disk_temperature_ramp(float tempK) {
+      float t = clamp(tempK, 1000.0, 14500.0);
+      // Reference-anchored blackbody ramp: deep orange (236,94,15) ~ (0.925,0.369,0.059)
+      // at the inner edge, warming to golden through the disk.
+      vec3 red    = vec3(1.00, 0.05, 0.01);   // deep warm red at low temp
+      vec3 orange = vec3(1.00, 0.37, 0.06);   // golden-orange matching reference
+      vec3 yellow = vec3(1.00, 0.75, 0.20);   // warm gold-yellow
+      vec3 white  = vec3(1.00, 0.955, 0.885);  // warm white, not cool
+      vec3 blue   = vec3(0.34, 0.58, 1.00);   // blue at extreme hot end
+
+      if (t < 3200.0) {
+          return mix(red, orange, smoothstep(1000.0, 3200.0, t));
+      }
+      if (t < 5800.0) {
+          return mix(orange, yellow, smoothstep(3200.0, 5800.0, t));
+      }
+      if (t < 9500.0) {
+          return mix(yellow, white, smoothstep(5800.0, 9500.0, t));
+      }
+      return mix(white, blue, smoothstep(9500.0, 14500.0, t));
+  }
   // Accretion Disk Physics & Rendering
   // Inputs:
   //   p: current ray position (vec3)
@@ -28,7 +54,9 @@ export const DISK_CHUNK = `
               sampleP = mix(p_prev, p, t);
           }
 
-          float sampleR = length(sampleP);
+          // Use the cylindrical radius in the disk plane (the spin axis is Y).
+          // This keeps filament spacing coherent as the ray crosses the thin disk.
+          float sampleR = max(length(sampleP.xz), 0.0001);
 
           float effectiveScaleHeight = min(u_disk_scale_height, ${PHYSICS_CONSTANTS.accretion.diskHeightMultiplier.toFixed(3)});
           float diskHeight = sampleR * effectiveScaleHeight;
@@ -55,44 +83,147 @@ export const DISK_CHUNK = `
               );
 
               // ==========================================================
-              // FILAMENTARY DISK TEXTURE
+              // HIGH-CONTRAST, FLOW-ALIGNED ACCRETION-DISK FILAMENTS
               //
-              // The disk is sampled in a frame that co-rotates with the
-              // fluid, in polar coordinates (azimuth, log radius). Noise
-              // stretched ~10:1 along the orbit gives long, thin streaks
-              // that follow the flow instead of boiling in place; a second,
-              // slower field adds the spiral arms and the clumpy gaps.
-              // Using cos/sin of the azimuth keeps the field periodic in
-              // phi (no seam at +/-PI) and independent of u_time's phase.
+              // The reference image is not just soft FBM cloud-noise. It has
+              // many narrow orbital strands, dark channels between them, and
+              // gentle radial/azimuthal warping that keeps the strands from
+              // looking like perfectly regular rings.
+              //
+              // Work in (azimuth, log-radius). Cos/sin embedding makes all
+              // noise periodic across the -PI/+PI seam. The field is sampled
+              // in the co-rotating frame, so the texture follows the disk.
               // ==========================================================
               float ang = atan(sampleP.z, sampleP.x);
               float phase = ang - rotAngle;
               float lr = log(sampleR / diskInner + 1.0);
 
-              // Fine concentric filaments (fast radial variation, slow in phi)
-              float fil = adaptiveFbm(vec3(cos(phase) * 2.0, sin(phase) * 2.0, lr * 11.0), 3);
-              // Larger turbulent clumps that break the rings up
-              float clump = adaptiveFbm(vec3(cos(phase) * 1.2, sin(phase) * 1.2, lr * 3.2), 2);
-              // Spiral arms: shear the azimuth with radius
-              float spiralPhase = phase - lr * 5.5;
-              float arms = adaptiveFbm(vec3(cos(spiralPhase) * 4.0, sin(spiralPhase) * 4.0, lr * 2.2), 2);
-
-              // Filaments dominate; clumps and arms sculpt their brightness.
-              // Scaled into (0,1] with a floor so no sample is fully empty.
-              float turbulence = clamp(
-                0.30 + 1.55 * (fil - 0.45) + 0.9 * (clump - 0.45) + 0.75 * (arms - 0.45),
-                0.04, 2.2
+              // Three correlated scales: broad flow lanes, medium clumps,
+              // and a finer field for local strand breakup. Angular scale is
+              // deliberately lower than radial scale so features stretch
+              // into long curved filaments instead of round noise blobs.
+              float broadFlow = adaptiveFbm(
+                  vec3(cos(phase) * 1.45, sin(phase) * 1.45, lr * 4.5), 2
               );
+              float mediumFlow = adaptiveFbm(
+                  vec3(cos(phase) * 3.0, sin(phase) * 3.0, lr * 11.0), 3
+              );
+              float clump = adaptiveFbm(
+                  vec3(cos(phase) * 2.0, sin(phase) * 2.0, lr * 6.0), 2
+              );
+
+              // Radius-dependent shear makes the larger structures form
+              // trailing spiral lanes. Broad and medium noise softly warp
+              // these lanes without introducing a seam at the angle wrap.
+              float spiralPhase = phase - lr * 6.6 + (broadFlow - 0.5) * 0.85;
+              float arms = adaptiveFbm(
+                  vec3(cos(spiralPhase) * 3.7, sin(spiralPhase) * 3.7, lr * 4.0), 2
+              );
+              float fineFlow = adaptiveFbm(
+                  vec3(cos(phase) * 5.2, sin(phase) * 5.2, lr * 23.0), 2
+              );
+
+              // Warp angle and log-radius separately. Tiny radial offsets
+              // are enough to bend high-frequency lines into silky, flowing
+              // arcs while preserving their continuity over many revolutions.
+              float phaseWarp =
+                    0.95 * sin(phase * 2.0 - lr * 2.5)
+                  + 0.42 * sin(phase * 5.0 + lr * 3.7)
+                  + (broadFlow - 0.5) * 2.7
+                  + (mediumFlow - 0.5) * 1.35
+                  + (arms - 0.5) * 0.85;
+              float radialWarp =
+                    (broadFlow - 0.5) * 0.0090
+                  + (mediumFlow - 0.5) * 0.0042
+                  + (fineFlow - 0.5) * 0.0018;
+              float warpedLr = lr + radialWarp;
+
+              // Main bright threads. Integer angular harmonics keep the
+              // signal seamless at 2PI while causing the rings to wind into
+              // a few long spiral lanes rather than staying concentric.
+              float mainFilamentPhase = warpedLr * 150.0 - phase * 2.0 + phaseWarp;
+              float mainFilamentSignal = 0.5 + 0.5 * cos(mainFilamentPhase);
+              float sharpFilaments = pow(clamp(mainFilamentSignal, 0.0, 1.0), 14.0);
+
+              // A second strand family supplies hairline detail between the
+              // larger filaments. Sharper ridge powers leave dark gaps, which
+              // are essential to the reference's crisp, high-contrast texture.
+              float fineFilamentPhase =
+                    warpedLr * 280.0 - phase * 3.0
+                  + phaseWarp * 1.28
+                  + (clump - 0.5) * 2.4;
+              float fineFilamentSignal = 0.5 + 0.5 * cos(fineFilamentPhase);
+              float fineFilaments = pow(clamp(fineFilamentSignal, 0.0, 1.0), 20.0);
+
+              // Sparse micro-strands add fine glints, not a uniform fog layer.
+              float microFilamentPhase =
+                    warpedLr * 420.0 - phase * 5.0
+                  + phaseWarp * 1.58
+                  + (fineFlow - 0.5) * 2.0;
+              float microFilamentSignal = 0.5 + 0.5 * cos(microFilamentPhase);
+              float microFilaments = pow(clamp(microFilamentSignal, 0.0, 1.0), 24.0);
+
+              // Ultra-fine micro-strands: hair-thin glints between the micro strands.
+              // High angular frequency keeps them as fine lines, not fog.
+              float ultraFlow = adaptiveFbm(
+                  vec3(cos(phase) * 8.0, sin(phase) * 8.0, lr * 40.0), 2
+              );
+              float ultraFilamentPhase =
+                    warpedLr * 640.0 - phase * 8.0
+                  + phaseWarp * 2.0
+                  + (ultraFlow - 0.5) * 3.0;
+              float ultraFilamentSignal = 0.5 + 0.5 * cos(ultraFilamentPhase);
+              float ultraFilaments = pow(clamp(ultraFilamentSignal, 0.0, 1.0), 30.0);
+
+              // Ridged noise follows the spiral flow and breaks individual
+              // strands into uneven bright/dim sections like turbulent gas.
+              float strandNoise = adaptiveFbm(
+                  vec3(cos(spiralPhase) * 4.6, sin(spiralPhase) * 4.6, warpedLr * 20.0), 3
+              );
+              float strandRidge = 1.0 - abs(2.0 * strandNoise - 1.0);
+              strandRidge = pow(clamp(strandRidge, 0.0, 1.0), 4.0);
+
+              // Modulate strand strength in broad lanes. Keep only a tiny
+              // density floor: a large floor fills the dark channels and makes
+              // the whole disk read as a blurry orange cloud.
+              float laneMask = smoothstep(
+                  0.25, 0.75,
+                  0.56 * clump + 0.27 * mediumFlow + 0.17 * arms
+              );
+              float filamentTexture = clamp(
+                    0.0025
+                  + 1.75 * sharpFilaments * (0.68 + 0.48 * laneMask)
+                  + 0.90 * fineFilaments
+                  + 0.38 * microFilaments
+                  + 0.30 * ultraFilaments
+                  + 0.26 * strandRidge,
+                  0.0, 2.25
+              );
+              float structureMod = clamp(
+                  0.25 + 1.05 * laneMask + 0.34 * (arms - 0.5),
+                  0.05, 1.50
+              );
+              float turbulence = clamp(filamentTexture * structureMod, 0.003, 2.25);
 
               float samplesDiskHeight = sampleR * effectiveScaleHeight;
               float heightFalloff = exp(-abs(sampleP.y) / max(0.001, samplesDiskHeight * ${PHYSICS_CONSTANTS.accretion.densityFalloff.toFixed(2)}));
 
-              // Radial envelope: bright across the inner disk, then a long
-              // fade so the visible edge sits well inside the physical
-              // outer radius (the reference disk ends in darkness, not a
-              // hard cut at the frame edge).
+              // A slow outer fade keeps the disk long and wispy; the tighter
+              // inner ramp protects a crisp edge near the black-hole silhouette.
               float radialT = clamp((sampleR - diskInner) / max(0.001, diskOuter - diskInner), 0.0, 1.0);
-              float radialFalloff = pow(1.0 - radialT, 2.2) * smoothstep(0.0, 0.06, radialT);
+              float radialFalloff = pow(1.0 - radialT, 2.10) * smoothstep(0.0, 0.040, radialT);
+
+              // Separate the thin hot rim core from its wider dimmer halo.
+              // This keeps a razor-like edge while retaining the soft glow in the reference.
+              float innerRimCore = exp(-pow((radialT - 0.012) / 0.0040, 2.0));
+              float innerRimHalo = exp(-pow((radialT - 0.031) / 0.023, 2.0));
+              float innerRim = max(innerRimCore, 0.48 * innerRimHalo);
+
+              // Dedicated hot ring: a thin, intensely bright band right at the
+              // inner edge, independent of filament noise. Matches the reference's
+              // blown-out white-hot ring hugging the event horizon silhouette.
+              float hotRingCore = exp(-pow((radialT - 0.008) / 0.0030, 2.0));
+              float hotRing = clamp(hotRingCore * 4.5, 0.0, 1.0);
 
               float baseDensity = turbulence * heightFalloff * radialFalloff;
 
@@ -131,7 +262,7 @@ export const DISK_CHUNK = `
                   // approaching side clearly brighter without clipping the HDR
                   // buffer; the cap stops a grazing inner-edge sample from
                   // detonating into a white blob.
-                  float beaming = min(pow(max(delta, 0.01), 3.2), 24.0);
+                  float beaming = min(pow(max(delta, 0.01), 2.6), 12.0);
 #else
                   float beaming = 1.0;
 #endif
@@ -144,65 +275,81 @@ export const DISK_CHUNK = `
                   // the visible edge without touching the inner-edge physics.
                   float radialTempGradient = pow(isco_r, 0.5) * pow(nt_factor, 0.25);
 
-                  // Temperature natively shifted by full relativistic Doppler delta
-                  // (Replacing the previous Euclidean gravRedshift multiplier)
-                  float temperature = u_disk_temp * radialTempGradient * delta;
+                   // Observed temperature includes relativistic Doppler beaming
+                   // (delta) and drives the radiated brightness. The colour,
+                   // however, follows the emitted blackbody temperature so the
+                   // Disk Temp slider shifts the whole disk through the
+                   // red -> orange -> yellow -> white -> blue progression and
+                   // the approaching/receding sides keep the same hue (the
+                   // reference disk is a uniform warm ribbon; beaming is a
+                   // brightness effect, not a colour flip).
+                   float emitTemp = u_disk_temp * radialTempGradient;
+                   float obsTemp = emitTemp * delta;
 
-                  // --- Golden-Orange Disk Color Grading ---
-                  // The reference features a rich golden-orange accretion disk.
-                  // Instead of the default blackbody (which peaks white-hot at high T),
-                  // we grade the color to produce golden hues.
-                  // 
-                  // 1. Base blackbody color at the observed temperature.
-                  // 2. Pull very hot regions back toward white-gold.
-                  // 3. Warm the mid-disk toward orange.
-                  // 4. Strong lensing enhancement for the brightest regions.
-                  // 
-                  // Map temperature to golden-orange chromaticity:
-                  //   - Cool regions (low T): slight blue-white
-                  //   - Mid regions: warm orange-gold
-                  //   - Hot regions: golden-yellow (capped)
-                  float diskColorTemp = max(temperature, 1000.0);
-                  // Gold-orange mapping: lower temps -> more orange, higher -> more yellow-white
-                  float goldWeight = smoothstep(4000.0, 6000.0, diskColorTemp) * 0.6;
-                  float orangeWeight = smoothstep(3000.0, 5000.0, diskColorTemp) * 0.8;
+                   // --- Explicit Disk Temperature Color Progression ---
+                   // The slider controls the primary hue in a fixed, easy-to-tune
+                   // sequence: RED -> ORANGE -> YELLOW -> WHITE -> BLUE.
+                   // The local emitted temperature contributes only a subtle tint,
+                   // so the cool radial profile can never force the whole disk red.
+                   float diskTempVisibility = smoothstep(1200.0, 5000.0, u_disk_temp);
+                   vec3 globalTemperatureColor = disk_temperature_ramp(u_disk_temp);
+                   vec3 localTemperatureColor = disk_temperature_ramp(max(1000.0, emitTemp));
+                   float localColorInfluence = mix(0.18, 0.10, diskTempVisibility);
+                   vec3 diskColor = mix(globalTemperatureColor, localTemperatureColor, localColorInfluence);
 
-                  // Base color from blackbody, then grade it
-                  vec3 diskColor = blackbody(temperature);
+                   // Keep filament accents aligned with the selected temperature:
+                   // warm cream at low/mid settings, cool blue-white at high settings.
+                   float hotColorShift = smoothstep(9500.0, 14500.0, u_disk_temp);
+                   vec3 filamentAccent = mix(
+                       vec3(1.0, 0.82, 0.58), vec3(0.72, 0.86, 1.0), hotColorShift
+                   );
+                   float filamentHighlight = clamp(
+                       sharpFilaments * 0.34 + microFilaments * 0.20, 0.0, 0.46
+                   ) * mix(0.18, 1.0, diskTempVisibility);
+                   vec3 filamentColor = mix(diskColor, filamentAccent, filamentHighlight);
 
-                  // Warm shadows and midtones toward gold/orange
-                  diskColor = mix(
-                      diskColor,
-                      vec3(1.0, 0.93, 0.75) * goldWeight + vec3(1.0, 0.85, 0.55) * orangeWeight,
-                      0.65
-                  );
+                   // The narrow inner rim follows the same temperature ramp too,
+                   // rather than remaining permanently orange when the disk turns blue.
+                   vec3 rimAccent = mix(
+                       vec3(1.0, 0.94, 0.82), vec3(0.72, 0.84, 1.0), hotColorShift
+                   );
+                   vec3 finalDiskColor = mix(
+                       filamentColor, rimAccent, clamp(innerRim * 0.62, 0.0, 0.62)
+                   );
 
-                  // Cap the very hottest regions from becoming pure white
-                  // and instead keep them golden-yellow
-                  float hotCap = smoothstep(0.55, 1.15, temperature / max(u_disk_temp, 1.0));
-                  diskColor = mix(diskColor, diskColor * vec3(1.0, 0.92, 0.78), 0.55 * hotCap);
+                   // Radiated power scales with the observed (beamed)
+                   // temperature. Fixed peak so brightness scales with the
+                   // absolute disk temperature instead of being normalised away
+                   // (peakTemp must NOT be proportional to u_disk_temp,
+                   // otherwise the slider cancels).
+                   float peakTemp = 15000.0;
+                   // Floor the observed temperature for the brightness calc so a
+                   // very cool disk never vanishes entirely: the disk (and its
+                   // event-horizon framing) must always remain visible, while
+                   // the colour above still tracks the real (unscaled) temp.
+                   float thermal = pow(clamp(max(obsTemp, 1500.0) / peakTemp, 0.0, 3.0), 2.2);
 
-                  // Additional golden warmth boost across the whole disk
-                  diskColor = mix(diskColor, diskColor * vec3(1.02, 0.98, 0.90), 0.15);
+                   // Minimum visible emissivity prevents the red accretion disk
+                   // from vanishing when the Disk Temp slider is turned down.
+                   // The floor fades out as temperature rises, preserving the
+                   // brighter, temperature-driven appearance at normal/hot settings.
+                   float visibleEmissionFloor = mix(0.16, 0.008, diskTempVisibility);
+                   float visibleThermal = max(thermal, visibleEmissionFloor);
+                   float emission = visibleThermal * beaming * u_diskGain;
 
-                  // Ensure no channel exceeds a warm ceiling
-                  diskColor = min(diskColor, vec3(1.1, 0.95, 0.8));
-
-                  // Radiated power scales ~T^4, but the reference frame keeps
-                  // the outer disk luminous instead of collapsing to brown.
-                  // A gentler exponent (2.2 instead of 3.0) keeps the golden
-                  // ribbon readable all the way out to the visible edge.
-                  float peakTemp = max(u_disk_temp * 0.78, 1.0);
-                  float thermal = pow(clamp(temperature / peakTemp, 0.0, 2.2), 2.2);
-
-                  float emission = thermal * beaming * u_diskGain;
+                  // Preserve a hairline-hot inner edge without turning the whole
+                  // inner disk into a large white blob. A subtle shoulder ties it
+                  // into the orange flow immediately outside the rim.
+                  float innerShoulder = (1.0 - smoothstep(0.035, 0.19, radialT))
+                                      * smoothstep(0.0, 0.025, radialT);
+                  emission *= (1.0 + 1.75 * innerRim) * (1.0 + 2.0 * hotRing) * (1.0 + 0.14 * innerShoulder);
                   // Optical depth per sample. Tuned so the disk reads as the
                   // luminous golden-orange ribbon of the reference frame: high
                   // enough to accumulate real brightness along the sight line,
                   // low enough that the filaments stay visible in the outer disk.
-                  float density = clamp(baseDensity * u_disk_density * 0.26 * dt, 0.0, 1.0);
+                   float density = clamp(baseDensity * u_disk_density * 0.25 * dt, 0.0, 1.0);
 
-                  accumulatedColor += diskColor * emission * density * (1.0 - accumulatedAlpha);
+                  accumulatedColor += finalDiskColor * emission * density * (1.0 - accumulatedAlpha);
                   accumulatedAlpha += density;
               }
           }

@@ -102,10 +102,10 @@ export const BACKGROUND_CHUNK = `
 
     // Gaussian with a soft shoulder: a sharp point core plus a faint halo,
     // so the star stays crisp at high resolution without aliasing away.
-    float radius = max(0.055 + bright * 0.055, cellsPerPixel * 0.75);
-    radius = min(radius, 0.24);
+    float radius = max(0.04 + bright * 0.04, cellsPerPixel * 0.6);
+    radius = min(radius, 0.18);
     float core = exp(-(d * d) / (2.0 * radius * radius));
-    float halo = exp(-(d * d) / (2.0 * radius * radius * 6.0)) * 0.12;
+    float halo = exp(-(d * d) / (2.0 * radius * radius * 6.0)) * 0.08;
     float shape = max(core, halo);
 
     float temp = hash(vec3(cell, faceId * 13.0 + seed + 73.7));
@@ -138,20 +138,27 @@ export const BACKGROUND_CHUNK = `
     float bandNorm = clamp(bandLuma * 6.0, 0.0, 1.0);
 
     // --- Procedural stars: sharp points, independent of the plate's blur ---
+    // Density scales the hash cutoff linearly: density 0.0 -> cutoff 1.0
+    // (no stars at all, a pure black sky) up to density 2.0 -> cutoff ~0.86
+    // (a rich photographic field). The previous 1.0 - density offset was
+    // inverted: density 0 still added 0.07 to every cutoff, so a "dark" sky
+    // stayed densely starred. The reference frame is a near-black sky with
+    // only the disk annulus lit, so the starfield must truly vanish at 0.
     float density = clamp(u_star_density, 0.0, 2.0);
-    float dScale = 1.0 - density;
-    float dOffset = dScale * 0.07;
+    float cutoffFloor = 1.0 - density * 0.07;
 
     vec3 stars = vec3(0.0);
     // Bright, rare, colored stars
-    stars += starLayer(dir, 110.0, clamp(0.996 + dOffset, 0.3, 0.999), 3.0, 2.4, 0.0, bandNorm);
+    stars += starLayer(dir, 110.0, clamp(0.997 - density * 0.07, cutoffFloor, 0.9995), 4.5, 1.3, 0.0, bandNorm);
     // Mid field
-    stars += starLayer(dir, 300.0, clamp(0.985 + dOffset, 0.3, 0.999), 5.0, 0.95, 217.3, bandNorm);
+    stars += starLayer(dir, 300.0, clamp(0.985 - density * 0.07, cutoffFloor, 0.9995), 5.0, 0.8, 217.3, bandNorm);
     // Dense faint field (this is what reads as "photographic density")
-    stars += starLayer(dir, 640.0, clamp(0.962 + dOffset, 0.3, 0.999), 7.0, 0.40, 433.7, bandNorm);
+    stars += starLayer(dir, 640.0, clamp(0.962 - density * 0.07, cutoffFloor, 0.9995), 7.0, 0.40, 433.7, bandNorm);
     // Very faint dust of stars
-    stars += starLayer(dir, 1100.0, clamp(0.94 + dOffset, 0.3, 0.999), 11.0, 0.20, 617.3, bandNorm);
+    stars += starLayer(dir, 1100.0, clamp(0.94 - density * 0.07, cutoffFloor, 0.9995), 11.0, 0.20, 617.3, bandNorm);
 
-    return band * 0.30 + stars;
+    // Render the photographic plate at its natural brightness so the space
+    // matches public/textures/Background.jpg instead of being crushed to black.
+    return band + stars;
   }
 `;

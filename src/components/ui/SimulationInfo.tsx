@@ -29,7 +29,7 @@ export const SimulationInfo = memo(function SimulationInfo({
               opacity: 1,
               x: 0,
               width: isExpanded
-                ? "min(576px, calc(100vw - 2rem))"
+                ? "min(420px, calc(50vw - 2rem))"
                 : "min(280px, calc(100vw - 2rem))", // 280px default, constrained on mobile
             }}
             exit={{ opacity: 0, x: -20 }}
@@ -38,7 +38,7 @@ export const SimulationInfo = memo(function SimulationInfo({
               stiffness: 250,
               damping: 30,
             }}
-            className={`fixed bottom-6 left-4 z-50 pointer-events-auto overflow-hidden shadow-2xl border border-white/10 ${
+            className={`fixed bottom-6 left-4 z-50 pointer-events-auto overflow-hidden shadow-2xl border border-white/10 max-w-[calc(50vw-2rem)] ${
               isExpanded
                 ? "frosted-glass-apple rounded-[1.5rem]"
                 : "liquid-glass rounded-[1.25rem]"

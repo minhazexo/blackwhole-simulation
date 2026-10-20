@@ -24,6 +24,7 @@ export function useHardwareSupport() {
   useEffect(() => {
     if (typeof window === "undefined") return;
 
+    let cancelled = false;
     const checkSupport = async () => {
       // 1. Detect In-App browsers (Instagram, FB, LinkedIn, etc.)
       const isInApp = isInAppBrowser();
@@ -42,7 +43,9 @@ export function useHardwareSupport() {
           try {
             const debugInfo = gl.getExtension("WEBGL_debug_renderer_info");
             if (debugInfo) {
-              renderer = String(gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL));
+              renderer = String(
+                gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL),
+              );
             }
           } catch {
             // Ignore
@@ -63,6 +66,7 @@ export function useHardwareSupport() {
         }
       }
 
+      if (cancelled) return;
       setSupport({
         webgl,
         webgpu,
@@ -74,6 +78,9 @@ export function useHardwareSupport() {
     };
 
     checkSupport();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return support;

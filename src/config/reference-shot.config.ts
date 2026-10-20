@@ -5,13 +5,16 @@
  * scene is tuned against the reference frame instead of accumulating magic
  * numbers in the renderer, the shaders, and the page defaults.
  *
- * The reference frame (public/Space.jpg, 640x400, 16:10) is:
+ * The reference frame (public/Real BlackWhole.jpg, 1534x862) is:
+ *   - ~75% pure black, 86% of pixels lum 0-25, mean luminance ~11, no
+ *     blown-out whites (max 209), top 5% luminous pixels avg RGB
+ *     (236, 94, 15) (deep orange);
  *   - a pitch-black circular shadow, roughly 28-32% of the viewport height,
  *     centred just above the middle of the frame;
  *   - a gold-orange accretion disk crossing the frame diagonally at ~20-25d
  *     (lower-left to upper-right), its lensed far side arcing over the shadow
  *     and its near side passing in front of it;
- *   - a dense, photographic star field with visible dust lanes.
+ *   - a very subtle, near-black sky (milkyway gain ~0.1, star density ~0.25).
  *
  * Everything here is a *composition* input. Physical parameters (mass, spin,
  * ISCO, Doppler beaming, Novikov-Thorne temperature) remain untouched: the
@@ -42,23 +45,29 @@ export const REFERENCE_SHOT = {
     /** Base temperature. The Doppler-shifted inner edge peaks near white-gold. */
     temperatureK: 5600,
     /** Optical density multiplier (0-5 in the UI). */
-    density: 4.5,
+    density: 5.0,
     /** Physical outer radius in M. The visible edge fades well inside this. */
     size: 50,
     /** H/R scale height. Thin enough for a crisp edge-on silhouette. */
     scaleHeight: 0.1,
     /** Linear HDR exposure of the disk emission. */
-    gain: 8.0,
+    gain: 9.0,
   },
 
   /** Sky exposure. */
   sky: {
-    /** Gain applied to the linearised Milky Way plate. */
-    gain: 1.35,
+    /** Gain applied to the linearised Milky Way plate. Tuned so the space
+     *  matches public/textures/Background.jpg at its natural brightness. */
+    gain: 0.3,
+    /**
+     * Procedural star density. Kept subtle so the photographic plate from
+     * public/textures/Background.jpg remains the dominant sky feature.
+     */
+    starDensity: 0.2,
   },
 
   /** Lensing strength (eta) at the reference framing. */
-  lensingStrength: 1.0,
+  lensingStrength: 0.5,
 } as const;
 
 /**

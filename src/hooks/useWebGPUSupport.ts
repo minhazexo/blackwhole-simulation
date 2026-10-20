@@ -5,6 +5,7 @@ export function useWebGPUSupport() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
     if (typeof navigator === "undefined") {
       setIsSupported(false);
       return;
@@ -19,6 +20,7 @@ export function useWebGPUSupport() {
     navigator.gpu
       .requestAdapter()
       .then((adapter) => {
+        if (cancelled) return;
         if (adapter) {
           setIsSupported(true);
         } else {
@@ -27,9 +29,13 @@ export function useWebGPUSupport() {
         }
       })
       .catch((e) => {
+        if (cancelled) return;
         setIsSupported(false);
         setError(e.message);
       });
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   return { isSupported, error };

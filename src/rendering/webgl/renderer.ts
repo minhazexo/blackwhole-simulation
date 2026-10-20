@@ -298,7 +298,7 @@ export class WebGLRenderer {
       // eslint-disable-next-line no-console
       console.warn("[renderer] Milky Way plate failed to load");
     };
-    image.src = "/textures/milkyway_2020_4k.jpg";
+    image.src = "/textures/Background.jpg";
   }
 
   private initPipelines() {

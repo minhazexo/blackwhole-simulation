@@ -83,7 +83,7 @@ export const PanelChrome = ({
               animate={{ y: 0, opacity: 1, scale: 1 }}
               exit={{ y: 50, opacity: 0, scale: 0.98 }}
               transition={{ type: "spring", stiffness: 150, damping: 25 }}
-              className="w-[98%] sm:w-[94%] lg:max-w-4xl xl:max-w-5xl pointer-events-auto"
+              className="w-[98%] sm:w-[94%] lg:max-w-3xl xl:max-w-5xl pointer-events-auto"
             >
               <div className="relative group overflow-hidden rounded-3xl glass-subtle-frost border border-white/10 shadow-2xl">
                 {/* Liquid Glass Infrastructure */}
