@@ -1,0 +1,16 @@
+{
+  "json.schemaDownload.trustedDomains": {
+    "https://app.kilo.ai/config.json": true
+  },
+  "files.autoSave": "afterDelay",
+  "editor.formatOnSave": true,
+  "git.autofetch": "all",
+  "git.autofetchPeriod": 180,
+  "git.fetchOnPull": true,
+  "git.pruneOnFetch": true,
+  "git.pullBeforeCheckout": true,
+  "git.postCommitCommand": "push",
+  "git.confirmSync": false,
+  "git.showActionButton": true,
+  "git.showPushSuccessNotification": true
+}

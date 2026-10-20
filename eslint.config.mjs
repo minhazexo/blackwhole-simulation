@@ -48,6 +48,10 @@ const config = [
       "next-env.d.ts",
       "node_modules/**",
       "public/wasm/**",
+      // Agent Manager worktrees are separate checkouts; linting them
+      // duplicates every warning and roughly doubles hook runtime.
+      ".kilo/**",
+      ".playwright-mcp/**",
     ],
   },
 ];
