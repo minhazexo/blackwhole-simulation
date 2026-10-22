@@ -94,7 +94,7 @@ const App = () => {
     // and Auto-Tune off. Nothing recalibrates this after mount, so the first
     // paint and the scene a minute later use the same quality rung.
     // Reference-shot composition: High Quality feature set without jets, so
-    // the opening frame matches public/Space.jpg. Camera framing, roll, and
+    // the opening frame matches the reference shot. Camera framing, roll, and
     // disk appearance come from DEFAULT_PARAMS (reference-shot.config.ts).
     return {
       ...DEFAULT_PARAMS,

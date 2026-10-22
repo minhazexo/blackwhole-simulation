@@ -2,6 +2,7 @@
 
 # dependencies
 /node_modules
+node_modules/
 /.pnp
 .pnp.*
 .yarn/*
@@ -12,16 +13,26 @@
 
 # testing
 /coverage
+/coverage-*
+/playwright-report
+/test-results
+/blob-report
+/playwright/.cache
 
 # next.js
 /.next/
 /out/
+next-env.d.ts
+*.tsbuildinfo
 
 # production
 /build
+/dist/
 
 # misc
 .DS_Store
+Thumbs.db
+desktop.ini
 *.pem
 *.txt
 # IndexNow ownership-proof files in /public/ are committed (served at deploy URL).
@@ -32,12 +43,15 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+*.log
 
 # env files (can opt-in for committing if needed)
 .env*
+!.env.example
 .kiro/
 .agent/
 .gemini/
+.opencode/
 
 # Local-only operator harness: never enter git
 .claude/
@@ -47,10 +61,6 @@ CLAUDE.md
 # vercel
 .vercel
 
-# typescript
-*.tsbuildinfo
-next-env.d.ts
-
 # rust
 physics-engine/target
 physics-engine/pkg
@@ -59,11 +69,23 @@ nul
 
 # local visual iteration captures
 /.shots/
+/public/_shots/
+/public/*.mp4
+/public/*.webm
+/public/*.mov
 
 # Kilo / Agent Manager local state (nested worktrees hold their own .git)
 .kilo/worktrees/
 .kilo/plans/
 .playwright-mcp/
+.kilocode/
+.kilo/.gitignore
+.kilo/agent-manager.json
+.kilo/run-script*
+.kilo/setup-script*
+# project agent definitions (.kilo/agent/*.md) stay tracked
+.kilo/agent/*
+!.kilo/agent/*.md
 
 # local analysis scratch (never committed)
 /tmp_*.py
@@ -77,3 +99,28 @@ nul
 /after_edit.png
 /ref_image.png
 /d
+/tmp/
+/temp/
+
+# generated knowledge graph (graphify) - rebuildable tool output, not product
+/graphify-out/
+
+# Freebuff local project state (dev log, project id)
+/.freebuff/
+
+# python scratch (scripts/one-shot)
+/__pycache__/
+*.py[cod]
+.pytest_cache/
+.ipynb_checkpoints/
+
+# editor and tooling caches
+.idea/
+.eslintcache
+.prettiercache
+.cache/
+.turbo/
+*.bak
+*.orig
+*.rej
+*~

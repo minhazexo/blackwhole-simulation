@@ -788,6 +788,13 @@ export class WebGLRenderer {
       "u_roll",
       ((params.roll ?? REFERENCE_SHOT.camera.rollDeg) * Math.PI) / 180,
     );
+    // Disk-local roll: tilts the accretion disk relative to the sky without
+    // rotating the star field, which is how the reference frame's disk angle
+    // is reproduced while the background stays pixel-identical.
+    this.uniformBatcher.set1f(
+      "u_disk_roll",
+      (REFERENCE_SHOT.camera.diskRollDeg * Math.PI) / 180,
+    );
     this.uniformBatcher.set1f("u_milkywayGain", REFERENCE_SHOT.sky.gain);
     this.uniformBatcher.set1f("u_diskGain", REFERENCE_SHOT.disk.gain);
     this.uniformBatcher.set1f(

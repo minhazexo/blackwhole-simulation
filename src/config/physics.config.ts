@@ -50,7 +50,7 @@ export const PHYSICS_CONSTANTS = {
     turbulenceScale: 0.75, // Increased frequency to match larger radius
     turbulenceDetail: 2.5, // Upped for finer nuances
     timeScale: 0.12, // Slightly slower for better stability
-    densityFalloff: 0.25, // Softened falloff to reduce 'vector lines' effect
+    densityFalloff: 0.13, // Crisper vertical profile: solid sheet, thin skirt
     description:
       "Governs the geometric and fluid dynamic properties of the accretion disk.",
   },

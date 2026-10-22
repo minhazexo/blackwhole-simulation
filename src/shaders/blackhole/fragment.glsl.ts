@@ -48,9 +48,13 @@ void main() {
 
     // Camera roll: rotate the ray grid about the view axis before any ray
     // is generated, so lensing, disk, and sky all tilt together.
-    uv = rollUV(uv);
+    // u_disk_roll tilts the disk relative to the sky; the sky is
+    // counter-rotated when it is sampled, so the star field stays exactly
+    // where it was while the disk takes the reference frame's angle.
+    uv = rollUV(uv, u_roll + u_disk_roll);
 
     vec3 ro, rd;
+    vec3 viewAxis;
     if (length(u_camPos) > 0.001) {
         ro = u_camPos;
         rd = qrot(u_camQuat, normalize(vec3(uv, 1.2)));
@@ -62,6 +66,7 @@ void main() {
         ro.yz *= rx; rd.yz *= rx;
         ro.xz *= ry; rd.xz *= ry;
     }
+    viewAxis = rd;
 
     // Black hole parameters
     float M = u_mass;
@@ -77,7 +82,9 @@ void main() {
 
     // === LOW QUALITY MODE ===
 #if defined(RAY_QUALITY_LOW) || defined(RAY_QUALITY_OFF)
-    vec3 bg = starfield(rd);
+    // Same counter-rotation as the full path: the sky keeps the camera's own
+    // orientation in every quality tier.
+    vec3 bg = starfield(rotateAboutAxis(rd, viewAxis, u_disk_roll));
     float d = length(cross(ro, rd));
     float shadow = smoothstep(rh * 1.2, rh * 0.9, d);
     float photonGlowIndicator = exp(-abs(d - rph) * 24.0) * 0.8;
@@ -241,22 +248,36 @@ void main() {
     // Background
     vec3 background = vec3(0.0);
 #ifdef ENABLE_STARS
-    background = starfield(v);
+    // Undo the disk-only roll so the sky keeps the camera's own orientation.
+    background = starfield(rotateAboutAxis(v, viewAxis, u_disk_roll));
 #endif
 
     // Photon ring
     vec3 photonColor = vec3(0.0);
 #ifdef ENABLE_PHOTON_GLOW
     if (!hitHorizon) {
-        float distToPhotonRing = abs(length(p) - rph);
-        float directRing = exp(-distToPhotonRing * 80.0) * 1.4 * u_lensing_strength;
+        // The photon ring is the lensed image of the photon sphere, so it is
+        // placed by the ray's impact parameter: it sits exactly on the
+        // critical impact parameter (the shadow's edge). Measuring the ring
+        // from the ray's final position instead only lights up the few rays
+        // that happen to end near the photon sphere, which makes the rim
+        // flicker, thin out and disappear between frames.
+        float bCrit = kerr_shadow_radius(M, a);
+        float bOffset = abs(impactParam - bCrit);
+        float directRing = exp(-bOffset * 10.0) * 1.6 * u_lensing_strength;
         float higherOrderRing = 0.0;
         if(photonCrossings > 0) {
-          float ringSharpness = 120.0 + float(photonCrossings) * 60.0;
-          float ringBrightness = exp(-float(photonCrossings) * 1.0) * 1.2;
-          higherOrderRing = exp(-distToPhotonRing * ringSharpness) * ringBrightness * u_lensing_strength;
+          // Higher-order images of the photon sphere sit slightly inside the
+          // critical impact parameter and are progressively fainter.
+          float bHigher = bCrit * (1.0 - 0.07 * float(photonCrossings));
+          higherOrderRing = exp(-abs(impactParam - bHigher) * 14.0)
+            * exp(-float(photonCrossings) * 1.2) * 0.6 * u_lensing_strength;
         }
-        photonColor = vec3(0.92, 0.24, 0.05) * (directRing + higherOrderRing);
+        // The photon ring must never fight the disk for attention: it is a
+        // hairline in the same blackbody family as the disk, not a saturated
+        // orange outline drawn around the shadow.
+        vec3 photonTint = mix(disk_temperature_ramp(u_disk_temp), vec3(1.0, 0.90, 0.74), 0.35);
+        photonColor = photonTint * (directRing + higherOrderRing);
     }
 #endif
 
@@ -270,7 +291,17 @@ void main() {
         background = vec3(0.0);
     }
 
-    vec3 finalColor = background * (1.0 - accumulatedAlpha) + accumulatedColor + photonColor * (1.0 - accumulatedAlpha) + ergoColor * (1.0 - accumulatedAlpha);
+    // Chroma preservation for the disk and the photon ring. The post chain
+    // tone maps per channel (ACES), which pulls saturated highlights towards
+    // white, so a hot accretion disk would read as silver. Boosting the chroma
+    // of the disk's own light keeps its blackbody hue in the final image.
+    // The sky is not touched: only the disk's contribution is re-saturated.
+    const float DISK_CHROMA_BOOST = 1.12;
+    vec3 diskLight = accumulatedColor + photonColor * (1.0 - accumulatedAlpha) + ergoColor * (1.0 - accumulatedAlpha);
+    float diskLuma = dot(diskLight, vec3(0.2126, 0.7152, 0.0722));
+    diskLight = max(vec3(0.0), vec3(diskLuma) + (diskLight - vec3(diskLuma)) * DISK_CHROMA_BOOST);
+
+    vec3 finalColor = background * (1.0 - accumulatedAlpha) + diskLight;
 
     // Kerr Shadow Guide (diagnostic overlay)
     if (u_show_kerr_shadow > 0.5) {

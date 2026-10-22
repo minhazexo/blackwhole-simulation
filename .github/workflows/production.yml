@@ -30,6 +30,11 @@ jobs:
     env:
       VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
       VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
+      # Secrets cannot be read directly in an `if:` expression, so token
+      # presence is surfaced as an env flag. When it is empty the deploy
+      # steps below are skipped and the run stays a green QA signal - the
+      # site is then published by Vercel's own Git integration.
+      VERCEL_DEPLOY_ENABLED: ${{ secrets.VERCEL_TOKEN != '' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -72,13 +77,17 @@ jobs:
           bun run test
 
       - name: Install Vercel CLI
+        if: env.VERCEL_DEPLOY_ENABLED == 'true'
         run: bun add -g vercel
 
       - name: Pull Vercel Environment
+        if: env.VERCEL_DEPLOY_ENABLED == 'true'
         run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Build Project for Production
+        if: env.VERCEL_DEPLOY_ENABLED == 'true'
         run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
 
       - name: Deploy to Vercel
+        if: env.VERCEL_DEPLOY_ENABLED == 'true'
         run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
